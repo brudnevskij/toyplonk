@@ -9,16 +9,16 @@ This project is designed to help understand how modern zk-SNARKs like PLONK work
 
 ## 🧱 Components
 
-| Module         | Description |
-|----------------|-------------|
+| Module                 | Description                                                  |
+|------------------------|--------------------------------------------------------------|
 | `constraint_system.rs` | Gate definitions, wire selectors, and arithmetic constraints |
-| `circuit.rs`           | Circuit construction and witness assignment |
-| `permutation.rs`       | Implements the copy-constraint permutation argument |
-| `fft.rs`               | Cooley–Tukey FFT and inverse FFT for evaluation domains |
-| `commitment.rs`        | Polynomial commitment scheme (planned: KZG via `arkworks`) |
-| `prover.rs`            | Proof generation logic (PLONK-style arithmetization) |
-| `verifier.rs`          | Proof verification logic |
-| `tests/`               | Unit and integration tests for all components |
+| `circuit.rs`           | Circuit construction and witness assignment                  |
+| `permutation.rs`       | Implements the copy-constraint permutation argument          |
+| `fft.rs`               | Cooley–Tukey FFT and inverse FFT for evaluation domains      |
+| `commitment.rs`        | Polynomial commitment scheme (planned: KZG via `arkworks`)   |
+| `prover.rs`            | Proof generation logic (PLONK-style arithmetization)         |
+| `verifier.rs`          | Proof verification logic                                     |
+| `tests/`               | Unit and integration tests for all components                |
 
 ---
 
