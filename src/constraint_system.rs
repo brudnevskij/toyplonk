@@ -55,3 +55,57 @@ impl<F: Field> Gate<F> {
         res.is_zero()
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use ark_bls12_381::Fr;
+
+    #[test]
+    fn test_simple_addition_gate_is_satisfied() {
+        use ark_bls12_381::Fr;
+        let gate = Gate::<Fr>::simple_addition_gate();
+
+        let a = Fr::from(3);
+        let b = Fr::from(4);
+        let c = Fr::from(7);
+
+        assert!(gate.is_satisfied(a, b, c));
+    }
+
+    #[test]
+    fn test_simple_mul_gate_is_satisfied() {
+        use ark_bls12_381::Fr;
+        let gate = Gate::<Fr>::simple_mul_gate();
+
+        let a = Fr::from(2);
+        let b = Fr::from(5);
+        let c = Fr::from(10);
+
+        assert!(gate.is_satisfied(a, b, c));
+    }
+
+    #[test]
+    fn test_add_gate_fails_on_wrong_values() {
+        use ark_bls12_381::Fr;
+        let gate = Gate::<Fr>::simple_addition_gate();
+
+        let a = Fr::from(1);
+        let b = Fr::from(2);
+        let c = Fr::from(5); // wrong!
+
+        assert!(!gate.is_satisfied(a, b, c));
+    }
+
+    #[test]
+    fn test_weighted_mul_gate() {
+        use ark_bls12_381::Fr;
+        let gate = Gate::<Fr>::mul_gate(Fr::from(3), Fr::from(2)); // 3ab = 2c
+
+        let a = Fr::from(2);
+        let b = Fr::from(5);
+        let c = Fr::from(15); // 3·2·5 = 2·15 = 30, OK
+
+        assert!(gate.is_satisfied(a, b, c));
+    }
+}
