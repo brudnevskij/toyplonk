@@ -1,5 +1,5 @@
 
-# 🔒 toy-plonk
+# 🔒 toyplonk
 
 A minimal, educational implementation of the [PLONK](https://eprint.iacr.org/2019/953) zero-knowledge proving system built from scratch in Rust.
 
