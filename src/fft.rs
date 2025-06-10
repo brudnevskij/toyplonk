@@ -8,7 +8,7 @@ use ark_ff::Field;
 ///
 /// Output:
 /// - Vector of `f(ω^0), f(ω^1), ..., f(ω^{n-1})`
-fn fft<F: Field>(coefficients: &[F], omega: F) -> Vec<F> {
+pub fn fft<F: Field>(coefficients: &[F], omega: F) -> Vec<F> {
     let n = coefficients.len();
     if n == 1 {
         return coefficients.to_vec(); // base case
@@ -44,7 +44,7 @@ fn fft<F: Field>(coefficients: &[F], omega: F) -> Vec<F> {
     r
 }
 
-fn inverse_fft<F: Field>(evaluations: &[F], omega: F) -> Vec<F> {
+pub fn inverse_fft<F: Field>(evaluations: &[F], omega: F) -> Vec<F> {
     let n = evaluations.len();
     let omega_inv = omega.inverse().unwrap();
     let mut result = fft(evaluations, omega_inv);
