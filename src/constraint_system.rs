@@ -2,11 +2,11 @@ use ark_ff::Field;
 
 #[derive(Clone, Debug)]
 pub struct Gate<F: Field> {
-    q_l: F,
-    q_r: F,
-    q_m: F,
-    q_o: F,
-    q_c: F,
+    pub q_l: F,
+    pub q_r: F,
+    pub q_m: F,
+    pub q_o: F,
+    pub q_c: F,
 }
 
 impl<F: Field> Gate<F> {
