@@ -1,7 +1,9 @@
-use crate::fft::{fft, inverse_fft};
+use crate::fft::{fft, inverse_fft, vec_to_poly};
 use crate::gate::Gate;
 use crate::witness::Witness;
 use ark_ff::Field;
+use ark_poly::DenseUVPolynomial;
+use ark_poly::univariate::DensePolynomial;
 
 pub struct Circuit<F: Field> {
     pub gates: Vec<Gate<F>>,
@@ -84,7 +86,13 @@ impl<F: Field> Circuit<F> {
         witness: &Witness<F>,
     ) -> bool {
         let omega = self.domain[1];
-        let SelectorPolynomials { q_l, q_r, q_m, q_o, q_c } = selector;
+        let SelectorPolynomials {
+            q_l,
+            q_r,
+            q_m,
+            q_o,
+            q_c,
+        } = selector;
         let Witness { a, b, c } = witness;
 
         // getting polynomials in evaluation form
@@ -106,15 +114,40 @@ impl<F: Field> Circuit<F> {
         }
         constraint_poly.iter().all(|x| x.is_zero())
     }
+
+    fn get_gate_constraint_polynomial(
+        &self,
+        selector: &SelectorPolynomials<F>,
+        witness: &Witness<F>,
+    ) -> Vec<F> {
+        let a_poly = vec_to_poly(witness.a.clone());
+        let b_poly = vec_to_poly(witness.b.clone());
+        let c_poly = vec_to_poly(witness.c.clone());
+
+        let q_l_poly = vec_to_poly(selector.q_l.clone());
+        let q_r_poly = vec_to_poly(selector.q_r.clone());
+        let q_m_poly = vec_to_poly(selector.q_m.clone());
+        let q_o_poly = vec_to_poly(selector.q_o.clone());
+        let q_c_poly = vec_to_poly(selector.q_c.clone());
+
+        // Now compute:
+        let mut p_poly = q_l_poly.naive_mul(&a_poly);
+        p_poly += &(q_r_poly.naive_mul(&b_poly));
+        p_poly += &(q_m_poly.naive_mul(&a_poly.naive_mul(&b_poly)));
+        p_poly += &(q_o_poly.naive_mul(&c_poly));
+        p_poly += &q_c_poly;
+
+        p_poly.coeffs.clone()
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use ark_ff::{FftField, Field};
-    use ark_bls12_381::Fr;
+    use crate::circuit::Circuit;
     use crate::gate::Gate;
     use crate::witness::Witness;
-    use crate::circuit::{Circuit};
+    use ark_bls12_381::Fr;
+    use ark_ff::{FftField, Field};
 
     fn get_omega(n: usize) -> Fr {
         let generator = Fr::get_root_of_unity(n as u64).unwrap();
@@ -128,20 +161,13 @@ mod tests {
         let domain: Vec<Fr> = (0..n).map(|i| omega.pow(&[i as u64])).collect();
 
         // Construct simple addition gates: a + b = c
-        let gates: Vec<Gate<Fr>> = vec![
-            Gate::simple_addition_gate(); n
-        ];
+        let gates: Vec<Gate<Fr>> = vec![Gate::simple_addition_gate(); n];
 
         // Set witness such that a + b = c
         let witness = Witness {
             a: vec![Fr::from(1), Fr::from(2), Fr::from(3), Fr::from(4)],
             b: vec![Fr::from(9), Fr::from(8), Fr::from(7), Fr::from(6)],
-            c: vec![
-                Fr::from(10),
-                Fr::from(10),
-                Fr::from(10),
-                Fr::from(10),
-            ],
+            c: vec![Fr::from(10), Fr::from(10), Fr::from(10), Fr::from(10)],
         };
 
         let public_inputs = vec![];
