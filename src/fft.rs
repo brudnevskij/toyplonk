@@ -1,4 +1,6 @@
 use ark_ff::Field;
+use ark_poly::DenseUVPolynomial;
+use ark_poly::univariate::DensePolynomial;
 
 /// Recursive Cooley–Tukey FFT over a finite field
 ///
@@ -147,4 +149,8 @@ mod tests {
 
         assert_eq!(result, coeffs, "IFFT(FFT(f)) != f");
     }
+}
+
+pub fn vec_to_poly<F: Field>(coefficients: Vec<F>) -> DensePolynomial<F> {
+    DensePolynomial::from_coefficients_vec(coefficients)
 }
