@@ -2,8 +2,7 @@ use ark_ff::Field;
 
 #[derive(Clone, Debug)]
 pub struct Gate<F: Field> {
-    pub
-    q_l: F,
+    pub q_l: F,
     pub q_r: F,
     pub q_m: F,
     pub q_o: F,
