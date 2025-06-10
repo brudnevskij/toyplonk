@@ -19,6 +19,12 @@ pub struct SelectorPolynomials<F: Field> {
     pub q_c: Vec<F>,
 }
 
+pub struct WitnessPolynomials<F: Field> {
+    pub a: Vec<F>,
+    pub b: Vec<F>,
+    pub c: Vec<F>,
+}
+
 impl <F:Field>Circuit<F> {
     pub fn new(gates: Vec<Gate<F>>, witness: Witness<F>,public_inputs: Vec<F>,domain: Vec<F>) -> Circuit<F> {
         Circuit{
@@ -53,6 +59,15 @@ impl <F:Field>Circuit<F> {
             q_m: inverse_fft(&q_m, omega),
             q_o: inverse_fft(&q_o, omega),
             q_c: inverse_fft(&q_c, omega),
+        }
+    }
+
+    pub fn get_witness_polynomials(&self) -> WitnessPolynomials<F> {
+        let omega = self.domain[1];
+        WitnessPolynomials{
+            a: inverse_fft(&self.witness.a, omega),
+            b: inverse_fft(&self.witness.b, omega),
+            c: inverse_fft(&self.witness.c, omega),
         }
     }
 }
