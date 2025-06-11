@@ -12,6 +12,7 @@ use ark_poly::univariate::DensePolynomial;
 /// - Vector of `f(ω^0), f(ω^1), ..., f(ω^{n-1})`
 pub fn fft<F: Field>(coefficients: &[F], omega: F) -> Vec<F> {
     let n = coefficients.len();
+    assert!(n.is_power_of_two(), "Input size must be power of two");
     if n == 1 {
         return coefficients.to_vec(); // base case
     }
@@ -55,6 +56,23 @@ pub fn inverse_fft<F: Field>(evaluations: &[F], omega: F) -> Vec<F> {
         *x *= n_inv;
     }
     result
+}
+
+/// Convert a coefficient vector into a DensePolynomial, trimming trailing zeros.
+pub fn vec_to_poly<F: Field>(mut coeffs: Vec<F>) -> DensePolynomial<F> {
+    for i in (0..coeffs.len()).rev() {
+        if !coeffs[i].is_zero() {
+            break;
+        }
+        coeffs.pop();
+    }
+
+    // Avoid creating zero-degree zero polynomial (arkworks panics)
+    if coeffs.is_empty() {
+        coeffs.push(F::zero());
+    }
+
+    DensePolynomial::from_coefficients_vec(coeffs)
 }
 
 #[cfg(test)]
@@ -149,8 +167,4 @@ mod tests {
 
         assert_eq!(result, coeffs, "IFFT(FFT(f)) != f");
     }
-}
-
-pub fn vec_to_poly<F: Field>(coefficients: Vec<F>) -> DensePolynomial<F> {
-    DensePolynomial::from_coefficients_vec(coefficients)
 }
