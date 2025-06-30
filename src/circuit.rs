@@ -13,7 +13,7 @@ pub struct Circuit<F: Field> {
     /// wiring contains equal wire ids vectors.
     /// Assuming wire id = row * n + col, where row = witness id,
     /// n = 3 as there 2 fan in 1 fan out, col = 0..2 for a,b,c.
-    pub wiring: Vec<Vec<F>>,
+    pub wiring: Vec<Vec<usize>>,
 }
 
 #[derive(Clone, Debug)]
