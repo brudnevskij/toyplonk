@@ -38,7 +38,7 @@ impl<F: Field> Circuit<F> {
         witness: Witness<F>,
         public_inputs: Vec<F>,
         domain: Vec<F>,
-        wiring: Vec<Vec<F>>,
+        wiring: Vec<Vec<usize>>,
     ) -> Circuit<F> {
         Circuit {
             gates,
