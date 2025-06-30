@@ -214,7 +214,7 @@ mod tests {
             witness_assignment.clone(),
             public_inputs,
             domain.clone(),
-            Vec::new()
+            Vec::new(),
         );
 
         // Selector and witness polynomials
@@ -270,7 +270,7 @@ mod tests {
             witness,
             public_inputs,
             domain: domain.clone(),
-            wiring: vec![]
+            wiring: vec![],
         };
 
         // Checking if CS is satisfied
