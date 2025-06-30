@@ -10,6 +10,10 @@ pub struct Circuit<F: Field> {
     pub witness: Witness<F>,
     pub public_inputs: Vec<F>,
     pub domain: Vec<F>,
+    /// wiring contains equal wire ids vectors.
+    /// Assuming wire id = row * n + col, where row = witness id,
+    /// n = 3 as there 2 fan in 1 fan out, col = 0..2 for a,b,c.
+    pub wiring: Vec<Vec<F>>,
 }
 
 #[derive(Clone, Debug)]
@@ -34,12 +38,14 @@ impl<F: Field> Circuit<F> {
         witness: Witness<F>,
         public_inputs: Vec<F>,
         domain: Vec<F>,
+        wiring: Vec<Vec<F>>,
     ) -> Circuit<F> {
         Circuit {
             gates,
             witness,
             public_inputs,
             domain,
+            wiring,
         }
     }
 
@@ -208,6 +214,7 @@ mod tests {
             witness_assignment.clone(),
             public_inputs,
             domain.clone(),
+            Vec::new()
         );
 
         // Selector and witness polynomials
@@ -263,6 +270,7 @@ mod tests {
             witness,
             public_inputs,
             domain: domain.clone(),
+            wiring: vec![]
         };
 
         // Checking if CS is satisfied
