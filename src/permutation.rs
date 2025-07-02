@@ -1,7 +1,9 @@
 use crate::witness::Witness;
 use ark_ff::Field;
+use ark_poly::univariate::DensePolynomial;
 use ark_std::iterable::Iterable;
 use itertools::izip;
+use crate::fft::{fft, inverse_fft};
 
 pub struct Permutation<F: Field> {
     pub witness: Witness<F>,
@@ -42,6 +44,22 @@ impl<F: Field> Permutation<F> {
             c_sigma.push(chunk[2]);
         }
 
+        (a_sigma, b_sigma, c_sigma)
+    }
+
+    fn interpolate_sigma_from_mapping(&self, mapping: Vec<usize>, domain: &Vec<F>) -> Vec<F> {
+        if mapping.len() != domain.len() {
+            panic!("Evaluation domain and mapping must be the same length, domain.len() = {}, mapping.len() = {}", domain.len(), mapping.len());
+        }
+
+        let evaluations = mapping.iter().map(|x| domain[*x]).collect::<Vec<_>>();
+        inverse_fft(&evaluations, domain[1])
+    }
+
+    fn get_sigma_polynomials(&self, mappings: (Vec<usize>, Vec<usize>, Vec<usize>), domain: &Vec<F>) -> (Vec<F>, Vec<F>, Vec<F>) {
+        let a_sigma = self.interpolate_sigma_from_mapping(mappings.0, domain);
+        let b_sigma = self.interpolate_sigma_from_mapping(mappings.1, domain);
+        let c_sigma = self.interpolate_sigma_from_mapping(mappings.2, domain);
         (a_sigma, b_sigma, c_sigma)
     }
 }
