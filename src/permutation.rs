@@ -68,9 +68,15 @@ impl<F: Field> Permutation<F> {
 mod tests {
     use super::*;
     use ark_bls12_381::Fr;
+    use ark_ff::FftField;
 
     fn fr(n: u64) -> Fr {
         Fr::from(n)
+    }
+
+    fn get_domain(n: usize) -> Vec<Fr> {
+        let omega = Fr::get_root_of_unity(n as u64).unwrap();
+        (0..n).map(|i| omega.pow(&[i as u64])).collect()
     }
 
     #[test]
@@ -123,6 +129,59 @@ mod tests {
         assert_eq!(a_sigma, vec![0, 3]);
         assert_eq!(b_sigma, vec![1, 4]);
         assert_eq!(c_sigma, vec![2, 5]);
+    }
+
+    #[test]
+    fn test_interpolate_sigma_from_mapping_basic() {
+        let domain = get_domain(4);
+        let padding_index = domain.len() - 1;
+        let mapping = vec![2, 0, 1, padding_index];
+        let perm = Permutation {
+            witness: Witness {
+                a: vec![],
+                b: vec![],
+                c: vec![],
+            },
+            wiring: vec![],
+        };
+
+        let sigma_poly = perm.interpolate_sigma_from_mapping(mapping.clone(), &domain);
+
+        let evaluations: Vec<Fr> = mapping.iter().map(|&i| domain[i]).collect();
+        let expected = evaluations;
+        let result = fft(&sigma_poly, domain[1]); // forward FFT to compare evaluations
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_get_sigma_polynomials_correctness() {
+        let domain = get_domain(4); // size 4
+        let padding_index= domain.len() - 1;
+        let mappings = (
+            vec![2, 0, 1, 0], // a_sigma map
+            vec![1, 2, 0, 0], // b_sigma map
+            vec![0, 2, 1, 0], // c_sigma map
+        );
+
+        let perm = Permutation {
+            witness: Witness {
+                a: vec![],
+                b: vec![],
+                c: vec![],
+            },
+            wiring: vec![],
+        };
+
+        let (a_sigma, b_sigma, c_sigma) = perm.get_sigma_polynomials(mappings.clone(), &domain);
+
+        let eval_a = fft(&a_sigma, domain[1]);
+        let eval_b = fft(&b_sigma, domain[1]);
+        let eval_c = fft(&c_sigma, domain[1]);
+
+        assert_eq!(eval_a, mappings.0.iter().map(|&i| domain[i]).collect::<Vec<_>>());
+        assert_eq!(eval_b, mappings.1.iter().map(|&i| domain[i]).collect::<Vec<_>>());
+        assert_eq!(eval_c, mappings.2.iter().map(|&i| domain[i]).collect::<Vec<_>>());
     }
 }
 
