@@ -1,9 +1,9 @@
+use crate::fft::{fft, inverse_fft};
 use crate::witness::Witness;
 use ark_ff::Field;
 use ark_poly::univariate::DensePolynomial;
 use ark_std::iterable::Iterable;
 use itertools::izip;
-use crate::fft::{fft, inverse_fft};
 
 pub struct Permutation<F: Field> {
     pub witness: Witness<F>,
@@ -34,29 +34,32 @@ impl<F: Field> Permutation<F> {
 
     fn get_sigma_maps(&self) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
         let sigma = self.generate_sigma_mapping();
-        let mut a_sigma = vec![];
-        let mut b_sigma = vec![];
-        let mut c_sigma = vec![];
-
-        for chunk in sigma.chunks_exact(3) {
-            a_sigma.push(chunk[0]);
-            b_sigma.push(chunk[1]);
-            c_sigma.push(chunk[2]);
-        }
+        let n = self.witness.a.len();
+        let mut a_sigma = sigma[..n].to_vec();
+        let mut b_sigma = sigma[n..2 * n].to_vec();
+        let mut c_sigma = sigma[2 * n..].to_vec();
 
         (a_sigma, b_sigma, c_sigma)
     }
 
     fn interpolate_sigma_from_mapping(&self, mapping: Vec<usize>, domain: &Vec<F>) -> Vec<F> {
         if mapping.len() != domain.len() {
-            panic!("Evaluation domain and mapping must be the same length, domain.len() = {}, mapping.len() = {}", domain.len(), mapping.len());
+            panic!(
+                "Evaluation domain and mapping must be the same length, domain.len() = {}, mapping.len() = {}",
+                domain.len(),
+                mapping.len()
+            );
         }
 
         let evaluations = mapping.iter().map(|x| domain[*x]).collect::<Vec<_>>();
         inverse_fft(&evaluations, domain[1])
     }
 
-    fn get_sigma_polynomials(&self, mappings: (Vec<usize>, Vec<usize>, Vec<usize>), domain: &Vec<F>) -> (Vec<F>, Vec<F>, Vec<F>) {
+    fn get_sigma_polynomials(
+        &self,
+        mappings: (Vec<usize>, Vec<usize>, Vec<usize>),
+        domain: &Vec<F>,
+    ) -> (Vec<F>, Vec<F>, Vec<F>) {
         let a_sigma = self.interpolate_sigma_from_mapping(mappings.0, domain);
         let b_sigma = self.interpolate_sigma_from_mapping(mappings.1, domain);
         let c_sigma = self.interpolate_sigma_from_mapping(mappings.2, domain);
@@ -106,9 +109,9 @@ mod tests {
 
         // Test chunked sigma maps
         let (a_sigma, b_sigma, c_sigma) = permutation.get_sigma_maps();
-        assert_eq!(a_sigma, vec![4, 1, 6]);
-        assert_eq!(b_sigma, vec![3, 8, 7]);
-        assert_eq!(c_sigma, vec![2, 5, 0]);
+        assert_eq!(a_sigma, vec![4, 3, 2]);
+        assert_eq!(b_sigma, vec![1, 8, 5]);
+        assert_eq!(c_sigma, vec![6, 7, 0]);
     }
 
     #[test]
@@ -126,9 +129,9 @@ mod tests {
         assert_eq!(sigma, (0..6).collect::<Vec<_>>());
 
         let (a_sigma, b_sigma, c_sigma) = permutation.get_sigma_maps();
-        assert_eq!(a_sigma, vec![0, 3]);
-        assert_eq!(b_sigma, vec![1, 4]);
-        assert_eq!(c_sigma, vec![2, 5]);
+        assert_eq!(a_sigma, vec![0, 1]);
+        assert_eq!(b_sigma, vec![2, 3]);
+        assert_eq!(c_sigma, vec![4, 5]);
     }
 
     #[test]
@@ -157,7 +160,7 @@ mod tests {
     #[test]
     fn test_get_sigma_polynomials_correctness() {
         let domain = get_domain(4); // size 4
-        let padding_index= domain.len() - 1;
+        let padding_index = domain.len() - 1;
         let mappings = (
             vec![2, 0, 1, 0], // a_sigma map
             vec![1, 2, 0, 0], // b_sigma map
@@ -179,9 +182,17 @@ mod tests {
         let eval_b = fft(&b_sigma, domain[1]);
         let eval_c = fft(&c_sigma, domain[1]);
 
-        assert_eq!(eval_a, mappings.0.iter().map(|&i| domain[i]).collect::<Vec<_>>());
-        assert_eq!(eval_b, mappings.1.iter().map(|&i| domain[i]).collect::<Vec<_>>());
-        assert_eq!(eval_c, mappings.2.iter().map(|&i| domain[i]).collect::<Vec<_>>());
+        assert_eq!(
+            eval_a,
+            mappings.0.iter().map(|&i| domain[i]).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            eval_b,
+            mappings.1.iter().map(|&i| domain[i]).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            eval_c,
+            mappings.2.iter().map(|&i| domain[i]).collect::<Vec<_>>()
+        );
     }
 }
-
