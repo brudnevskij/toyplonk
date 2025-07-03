@@ -1,5 +1,6 @@
 use crate::fft::{fft, inverse_fft, vec_to_poly};
 use crate::witness::Witness;
+use ark_bls12_381::Fr;
 use ark_ff::Field;
 use ark_poly::univariate::{DenseOrSparsePolynomial, DensePolynomial};
 use ark_poly::{DenseUVPolynomial, Polynomial};
@@ -112,6 +113,64 @@ impl<F: Field> Permutation<F> {
 
         inverse_fft(&z_evaluations, omega)
     }
+}
+
+pub fn verify_permutation_argument<F: Field>(
+    domain: &[F],
+    z_evals: &[F],
+    witness: &Witness<F>,
+    sigma_maps: &(Vec<usize>, Vec<usize>, Vec<usize>),
+    k1: F,
+    k2: F,
+    beta: F,
+    gamma: F,
+) -> Result<(), String> {
+    let omega = domain[1];
+    let n = domain.len();
+    let a = &witness.a;
+    let b = &witness.b;
+    let c = &witness.c;
+
+    // H' calculation
+    let b_coset = domain.iter().map(|&x| k1 * x).collect::<Vec<_>>();
+    let c_coset = domain.iter().map(|&x| k2 * x).collect::<Vec<_>>();
+    let mut h_prime = domain.to_vec();
+    h_prime.extend(b_coset);
+    h_prime.extend(c_coset);
+
+    let mut expected = vec![F::one()];
+    for i in 0..n {
+        let x = domain[i];
+        let a_i = a[i];
+        let b_i = b[i];
+        let c_i = c[i];
+
+        let numerator = (a_i + beta * x + gamma)
+            * (b_i + beta * k1 * x + gamma)
+            * (c_i + beta * k2 * x + gamma);
+
+        let a_sigma = sigma_maps.0[i];
+        let b_sigma = sigma_maps.1[i];
+        let c_sigma = sigma_maps.2[i];
+
+        let a_s = h_prime[a_sigma];
+        let b_s = h_prime[b_sigma];
+        let c_s = h_prime[c_sigma];
+
+        let denominator =
+            (a_i + beta * a_s + gamma) * (b_i + beta * b_s + gamma) * (c_i + beta * c_s + gamma);
+
+        let next = expected[i] * (numerator / denominator);
+        expected.push(next);
+
+        if z_evals[i] != next {
+            return Err(format!(
+                "Permutation recurrence mismatch at i = {}:\nexpected {}\nbut got {}",
+                i, next, z_evals[i]
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
