@@ -1,7 +1,8 @@
-use crate::fft::{fft, inverse_fft};
+use crate::fft::{fft, inverse_fft, vec_to_poly};
 use crate::witness::Witness;
 use ark_ff::Field;
-use ark_poly::univariate::DensePolynomial;
+use ark_poly::univariate::{DenseOrSparsePolynomial, DensePolynomial};
+use ark_poly::{DenseUVPolynomial, Polynomial};
 use ark_std::iterable::Iterable;
 use itertools::izip;
 
@@ -35,35 +36,85 @@ impl<F: Field> Permutation<F> {
     fn get_sigma_maps(&self) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
         let sigma = self.generate_sigma_mapping();
         let n = self.witness.a.len();
-        let mut a_sigma = sigma[..n].to_vec();
-        let mut b_sigma = sigma[n..2 * n].to_vec();
-        let mut c_sigma = sigma[2 * n..].to_vec();
+        let a_sigma = sigma[..n].to_vec();
+        let b_sigma = sigma[n..2 * n].to_vec();
+        let c_sigma = sigma[2 * n..].to_vec();
 
         (a_sigma, b_sigma, c_sigma)
-    }
-
-    fn interpolate_sigma_from_mapping(&self, mapping: Vec<usize>, domain: &Vec<F>) -> Vec<F> {
-        if mapping.len() != domain.len() {
-            panic!(
-                "Evaluation domain and mapping must be the same length, domain.len() = {}, mapping.len() = {}",
-                domain.len(),
-                mapping.len()
-            );
-        }
-
-        let evaluations = mapping.iter().map(|x| domain[*x]).collect::<Vec<_>>();
-        inverse_fft(&evaluations, domain[1])
     }
 
     fn get_sigma_polynomials(
         &self,
+        k1: F,
+        k2: F,
         mappings: (Vec<usize>, Vec<usize>, Vec<usize>),
         domain: &Vec<F>,
     ) -> (Vec<F>, Vec<F>, Vec<F>) {
-        let a_sigma = self.interpolate_sigma_from_mapping(mappings.0, domain);
-        let b_sigma = self.interpolate_sigma_from_mapping(mappings.1, domain);
-        let c_sigma = self.interpolate_sigma_from_mapping(mappings.2, domain);
+        let omega = domain[1];
+
+        let b_coset = domain.iter().map(|&x| k1 * x).collect::<Vec<_>>();
+        let c_coset = domain.iter().map(|&x| k2 * x).collect::<Vec<_>>();
+
+        let mut h_prime = domain.clone(); // h
+        h_prime.extend(b_coset); // h ∪ k1·h
+        h_prime.extend(c_coset); // ∪ k2·h
+
+        let a_evaluations = mappings.0.iter().map(|&i| h_prime[i]).collect::<Vec<_>>();
+        let b_evaluations = mappings.1.iter().map(|&i| h_prime[i]).collect::<Vec<_>>();
+        let c_evaluations = mappings.2.iter().map(|&i| h_prime[i]).collect::<Vec<_>>();
+
+        let a_sigma = inverse_fft(&a_evaluations, omega);
+        let b_sigma = inverse_fft(&b_evaluations, omega);
+        let c_sigma = inverse_fft(&c_evaluations, omega);
+
         (a_sigma, b_sigma, c_sigma)
+    }
+
+    fn calculate_rolling_product(
+        &self,
+        k1: F,
+        k2: F,
+        sigma_polys: (Vec<F>, Vec<F>, Vec<F>),
+        domain: &Vec<F>,
+        gamma: F,
+        beta: F,
+    ) -> Vec<F> {
+        let omega = domain[1];
+
+        // coefficients
+        let (a_sigma_coefficients, b_sigma_coefficients, c_sigma_coefficients) = sigma_polys;
+
+        let a_sigma = vec_to_poly(a_sigma_coefficients);
+        let b_sigma = vec_to_poly(b_sigma_coefficients);
+        let c_sigma = vec_to_poly(c_sigma_coefficients);
+
+        let mut z_evaluations = vec![F::one()];
+        let a = &self.witness.a;
+        let b = &self.witness.b;
+        let c = &self.witness.c;
+
+        // calculating all Z(x) evals except last one.
+        for i in 0..self.witness.a.len() {
+            let a_num = a[i] + beta * domain[i] + gamma;
+            let b_num = b[i] + beta * domain[i] * k1 + gamma;
+            let c_num = c[i] + beta * domain[i] * k2 + gamma;
+            let numerator = a_num * b_num * c_num;
+
+            let a_denom = a[i] + beta * a_sigma.evaluate(&domain[i]) + gamma;
+            let b_denom = b[i] + beta * b_sigma.evaluate(&domain[i]) + gamma;
+            let c_denom = c[i] + beta * c_sigma.evaluate(&domain[i]) + gamma;
+            let denominator = a_denom * b_denom * c_denom;
+
+            z_evaluations.push(z_evaluations.last().unwrap().clone() * (numerator / denominator));
+        }
+
+        z_evaluations = z_evaluations[1..].to_vec();
+        // Pad if needed
+        while z_evaluations.len() < domain.len() {
+            z_evaluations.push(*z_evaluations.last().unwrap());
+        }
+
+        inverse_fft(&z_evaluations, omega)
     }
 }
 
@@ -71,7 +122,7 @@ impl<F: Field> Permutation<F> {
 mod tests {
     use super::*;
     use ark_bls12_381::Fr;
-    use ark_ff::FftField;
+    use ark_ff::{FftField, One};
 
     fn fr(n: u64) -> Fr {
         Fr::from(n)
@@ -87,8 +138,8 @@ mod tests {
         // Witness with 3 gates → 3 * 3 = 9 wires
         let witness = Witness {
             a: vec![fr(1), fr(2), fr(3)],
-            b: vec![fr(4), fr(5), fr(6)],
-            c: vec![fr(7), fr(8), fr(9)],
+            b: vec![fr(2), fr(1), fr(6)],
+            c: vec![fr(7), fr(8), fr(1)],
         };
 
         // Wiring groups:
@@ -135,29 +186,6 @@ mod tests {
     }
 
     #[test]
-    fn test_interpolate_sigma_from_mapping_basic() {
-        let domain = get_domain(4);
-        let padding_index = domain.len() - 1;
-        let mapping = vec![2, 0, 1, padding_index];
-        let perm = Permutation {
-            witness: Witness {
-                a: vec![],
-                b: vec![],
-                c: vec![],
-            },
-            wiring: vec![],
-        };
-
-        let sigma_poly = perm.interpolate_sigma_from_mapping(mapping.clone(), &domain);
-
-        let evaluations: Vec<Fr> = mapping.iter().map(|&i| domain[i]).collect();
-        let expected = evaluations;
-        let result = fft(&sigma_poly, domain[1]); // forward FFT to compare evaluations
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
     fn test_get_sigma_polynomials_correctness() {
         let domain = get_domain(4); // size 4
         let padding_index = domain.len() - 1;
@@ -175,8 +203,11 @@ mod tests {
             },
             wiring: vec![],
         };
+        let k1 = Fr::from(2u64);
+        let k2 = Fr::from(3u64);
 
-        let (a_sigma, b_sigma, c_sigma) = perm.get_sigma_polynomials(mappings.clone(), &domain);
+        let (a_sigma, b_sigma, c_sigma) =
+            perm.get_sigma_polynomials(k1, k2, mappings.clone(), &domain);
 
         let eval_a = fft(&a_sigma, domain[1]);
         let eval_b = fft(&b_sigma, domain[1]);
@@ -194,5 +225,70 @@ mod tests {
             eval_c,
             mappings.2.iter().map(|&i| domain[i]).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn test_rolling_product_correctness_small_example() {
+        let n = 4;
+        let domain = get_domain(n);
+
+        // Dummy witness with distinct values
+        let witness = Witness {
+            a: vec![fr(1), fr(2), fr(10), fr(4)],
+            b: vec![fr(5), fr(1), fr(7), fr(10)],
+            c: vec![fr(9), fr(10), fr(11), fr(12)],
+        };
+
+        // No permutation wiring, identity sigma
+        let wiring = vec![vec![0, 5], vec![2, 7, 9]]; // i.e., sigma[i] = i
+        let perm = Permutation { witness, wiring };
+
+        // Identity sigma maps
+        let sigma_maps = perm.get_sigma_maps();
+
+        let k1 = Fr::from(2u64);
+        let k2 = Fr::from(3u64);
+        let sigma_polys = perm.get_sigma_polynomials(k1, k2, sigma_maps.clone(), &domain);
+
+        let gamma = fr(13);
+        let beta = fr(17);
+        let z_poly = perm.calculate_rolling_product(k1, k2, sigma_polys, &domain, gamma, beta);
+
+        // Forward FFT of Z(X) to get back evaluations
+        let z_eval = fft(&z_poly, domain[1]);
+
+        // Check recurrence:
+        assert_eq!(z_eval.len(), domain.len());
+        assert_eq!(z_eval[z_eval.len() - 1], Fr::one());
+
+        // defining H' to skip interpolation
+        let b_coset = domain.iter().map(|&x| k1 * x).collect::<Vec<_>>();
+        let c_coset = domain.iter().map(|&x| k2 * x).collect::<Vec<_>>();
+        let mut h_prime = domain.clone(); // h
+        h_prime.extend(b_coset);
+        h_prime.extend(c_coset);
+
+        let mut expected = vec![Fr::one()];
+        for i in 0..n {
+            let a = perm.witness.a[i];
+            let b = perm.witness.b[i];
+            let c = perm.witness.c[i];
+            let x = domain[i];
+
+            let numerator = (a + beta * domain[i] + gamma)
+                * (b + beta * domain[i] * k1 + gamma)
+                * (c + beta * domain[i] * k2 + gamma);
+
+            let a_sigma = sigma_maps.0[i];
+            let b_sigma = sigma_maps.1[i];
+            let c_sigma = sigma_maps.2[i];
+
+            let denominator = (a + beta * h_prime[a_sigma] + gamma)
+                * (b + beta * h_prime[b_sigma] + gamma)
+                * (c + beta * h_prime[c_sigma] + gamma);
+
+            expected.push(expected[i] * (numerator / denominator));
+            assert_eq!(z_eval[i], expected[i + 1], "Mismatch at i = {}", i);
+        }
     }
 }
