@@ -283,7 +283,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rolling_product_correctness_small_example() {
+    fn test_sigma_maps_match_expected_permutation_cycles() {
         let n = 4;
         let domain = get_domain(n);
 
@@ -320,7 +320,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rolling_product() {
+    fn test_zx_satisfies_recurrence_on_padded_domain() {
         let n = 8;
         let domain = get_domain(n);
 
@@ -358,4 +358,37 @@ mod tests {
         let result =verify_permutation_argument(&domain,&z_eval,&witness,&sigma_maps,k1,k2,beta,gamma);
         assert_eq!(Ok(()),result);
     }
+
+    #[test]
+    fn test_rolling_product_failure() {
+        let n = 4;
+        let domain = get_domain(n);
+
+        let witness = Witness {
+            a: vec![fr(1), fr(2), fr(3), fr(4)],
+            b: vec![fr(5), fr(6), fr(7), fr(8)],
+            c: vec![fr(9), fr(10), fr(11), fr(12)],
+        };
+
+        let wiring = vec![];
+        let perm = Permutation::new(witness.clone(), wiring);
+        let sigma_maps = perm.get_sigma_maps();
+
+        let k1 = fr(2);
+        let k2 = fr(3);
+        let beta = fr(6);
+        let gamma = fr(9);
+
+        let sigma_polys = perm.get_sigma_polynomials(k1, k2, sigma_maps.clone(), &domain);
+        let mut z_poly = perm.calculate_rolling_product(k1, k2, sigma_polys, &domain, gamma, beta);
+
+        // Tamper Z polynomial
+        z_poly[1] += fr(1);
+
+        let z_eval = fft(&z_poly, domain[1]);
+
+        let result = verify_permutation_argument(&domain, &z_eval, &witness, &sigma_maps, k1, k2, beta, gamma);
+        assert!(result.is_err(), "Expected verification failure, but got Ok");
+    }
+
 }
