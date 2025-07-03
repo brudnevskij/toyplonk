@@ -1,18 +1,17 @@
 use crate::fft::{fft, inverse_fft, vec_to_poly};
 use crate::gate::Gate;
+use crate::permutation::Permutation;
 use crate::witness::Witness;
 use ark_ff::Field;
 use ark_poly::univariate::DensePolynomial;
+use itertools::Permutations;
 
 pub struct Circuit<F: Field> {
     pub gates: Vec<Gate<F>>,
     pub witness: Witness<F>,
     pub public_inputs: Vec<F>,
     pub domain: Vec<F>,
-    /// wiring contains equal wire ids vectors.
-    /// Assuming wire id = row * n + col, where row = witness id,
-    /// n = 3 as there 2 fan in 1 fan out, col = 0..2 for a,b,c.
-    pub wiring: Vec<Vec<usize>>,
+    pub permutation: Permutation<F>,
 }
 
 #[derive(Clone, Debug)]
@@ -39,12 +38,16 @@ impl<F: Field> Circuit<F> {
         domain: Vec<F>,
         wiring: Vec<Vec<usize>>,
     ) -> Circuit<F> {
+        let permutation = Permutation {
+            witness: witness.clone(),
+            wiring,
+        };
         Circuit {
             gates,
             witness,
             public_inputs,
             domain,
-            wiring,
+            permutation,
         }
     }
 
@@ -263,14 +266,7 @@ mod tests {
         };
 
         let public_inputs = vec![];
-
-        let circuit = Circuit {
-            gates,
-            witness,
-            public_inputs,
-            domain: domain.clone(),
-            wiring: vec![],
-        };
+        let circuit = Circuit::new(gates, witness, public_inputs, domain.clone(), vec![]);
 
         // Checking if CS is satisfied
         let selector = circuit.get_selector_polynomials();

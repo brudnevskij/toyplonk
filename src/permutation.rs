@@ -295,7 +295,10 @@ mod tests {
         };
 
         let wiring = vec![vec![0, 5], vec![2, 7, 9]]; // i.e., sigma[i] = i
-        let perm = Permutation { witness:witness.clone(), wiring };
+        let perm = Permutation {
+            witness: witness.clone(),
+            wiring,
+        };
 
         // Identity sigma maps
         let sigma_maps = perm.get_sigma_maps();
@@ -315,8 +318,17 @@ mod tests {
         assert_eq!(z_eval.len(), domain.len());
         assert_eq!(z_eval[z_eval.len() - 1], Fr::one());
 
-        let result =verify_permutation_argument(&domain,&z_eval,&witness,&sigma_maps,k1,k2,beta,gamma);
-        assert_eq!(Ok(()),result);
+        let result = verify_permutation_argument(
+            &domain,
+            &z_eval,
+            &witness,
+            &sigma_maps,
+            k1,
+            k2,
+            beta,
+            gamma,
+        );
+        assert_eq!(Ok(()), result);
     }
 
     #[test]
@@ -355,8 +367,17 @@ mod tests {
         assert_eq!(z_eval.len(), domain.len());
         assert_eq!(z_eval[z_eval.len() - 1], fr(1)); // last value usually settles
 
-        let result =verify_permutation_argument(&domain,&z_eval,&witness,&sigma_maps,k1,k2,beta,gamma);
-        assert_eq!(Ok(()),result);
+        let result = verify_permutation_argument(
+            &domain,
+            &z_eval,
+            &witness,
+            &sigma_maps,
+            k1,
+            k2,
+            beta,
+            gamma,
+        );
+        assert_eq!(Ok(()), result);
     }
 
     #[test]
@@ -387,8 +408,16 @@ mod tests {
 
         let z_eval = fft(&z_poly, domain[1]);
 
-        let result = verify_permutation_argument(&domain, &z_eval, &witness, &sigma_maps, k1, k2, beta, gamma);
+        let result = verify_permutation_argument(
+            &domain,
+            &z_eval,
+            &witness,
+            &sigma_maps,
+            k1,
+            k2,
+            beta,
+            gamma,
+        );
         assert!(result.is_err(), "Expected verification failure, but got Ok");
     }
-
 }
