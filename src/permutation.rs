@@ -294,9 +294,8 @@ mod tests {
             c: vec![fr(9), fr(10), fr(11), fr(12)],
         };
 
-        // No permutation wiring, identity sigma
         let wiring = vec![vec![0, 5], vec![2, 7, 9]]; // i.e., sigma[i] = i
-        let perm = Permutation { witness, wiring };
+        let perm = Permutation { witness:witness.clone(), wiring };
 
         // Identity sigma maps
         let sigma_maps = perm.get_sigma_maps();
@@ -316,44 +315,14 @@ mod tests {
         assert_eq!(z_eval.len(), domain.len());
         assert_eq!(z_eval[z_eval.len() - 1], Fr::one());
 
-        // defining H' to skip interpolation
-        let b_coset = domain.iter().map(|&x| k1 * x).collect::<Vec<_>>();
-        let c_coset = domain.iter().map(|&x| k2 * x).collect::<Vec<_>>();
-        let mut h_prime = domain.clone(); // h
-        h_prime.extend(b_coset);
-        h_prime.extend(c_coset);
-
-        let mut expected = vec![Fr::one()];
-        for i in 0..n {
-            let a = perm.witness.a[i];
-            let b = perm.witness.b[i];
-            let c = perm.witness.c[i];
-            let x = domain[i];
-
-            let numerator = (a + beta * domain[i] + gamma)
-                * (b + beta * domain[i] * k1 + gamma)
-                * (c + beta * domain[i] * k2 + gamma);
-
-            let a_sigma = sigma_maps.0[i];
-            let b_sigma = sigma_maps.1[i];
-            let c_sigma = sigma_maps.2[i];
-
-            let denominator = (a + beta * h_prime[a_sigma] + gamma)
-                * (b + beta * h_prime[b_sigma] + gamma)
-                * (c + beta * h_prime[c_sigma] + gamma);
-
-            expected.push(expected[i] * (numerator / denominator));
-            assert_eq!(z_eval[i], expected[i + 1], "Mismatch at i = {}", i);
-        }
+        let result =verify_permutation_argument(&domain,&z_eval,&witness,&sigma_maps,k1,k2,beta,gamma);
+        assert_eq!(Ok(()),result);
     }
 
     #[test]
     fn test_rolling_product() {
         let n = 8;
         let domain = get_domain(n);
-
-        // Make sure domain supports FFT
-        assert_eq!(domain.len(), n);
 
         // witness padded with zeroes
         let witness = Witness {
@@ -369,7 +338,7 @@ mod tests {
         // wire indexing: a_i = i, b_i = n + i, c_i = 2n + i
         let wiring = vec![vec![0, 10, 20], vec![1, 9], vec![16, 21]];
 
-        let perm = Permutation::new(witness, wiring);
+        let perm = Permutation::new(witness.clone(), wiring);
 
         let sigma_maps = perm.get_sigma_maps();
 
@@ -386,47 +355,7 @@ mod tests {
         assert_eq!(z_eval.len(), domain.len());
         assert_eq!(z_eval[z_eval.len() - 1], fr(1)); // last value usually settles
 
-        // Check recurrence manually
-        let mut expected = vec![fr(1)];
-
-        // Construct H′ = H ∪ k1·H ∪ k2·H
-        let mut h_prime = domain.clone();
-        h_prime.extend(domain.iter().map(|x| *x * k1));
-        h_prime.extend(domain.iter().map(|x| *x * k2));
-
-        let a = &perm.witness.a;
-        let b = &perm.witness.b;
-        let c = &perm.witness.c;
-
-        for i in 0..n {
-            let x = domain[i];
-            let a_i = a[i];
-            let b_i = b[i];
-            let c_i = c[i];
-
-            let numerator = (a_i + beta * x + gamma)
-                * (b_i + beta * k1 * x + gamma)
-                * (c_i + beta * k2 * x + gamma);
-
-            let a_sigma = sigma_maps.0[i];
-            let b_sigma = sigma_maps.1[i];
-            let c_sigma = sigma_maps.2[i];
-
-            let a_s = h_prime[a_sigma];
-            let b_s = h_prime[b_sigma];
-            let c_s = h_prime[c_sigma];
-
-            let denominator = (a_i + beta * a_s + gamma)
-                * (b_i + beta * b_s + gamma)
-                * (c_i + beta * c_s + gamma);
-
-            let next = expected[i] * (numerator / denominator);
-            expected.push(next);
-            assert_eq!(
-                z_eval[i], next,
-                "Mismatch at i = {}: z[i] = {}, expected = {}",
-                i, z_eval[i], next
-            );
-        }
+        let result =verify_permutation_argument(&domain,&z_eval,&witness,&sigma_maps,k1,k2,beta,gamma);
+        assert_eq!(Ok(()),result);
     }
 }
