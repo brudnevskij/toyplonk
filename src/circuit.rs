@@ -2,7 +2,6 @@ use crate::fft::{fft, inverse_fft, vec_to_poly};
 use crate::gate::Gate;
 use crate::witness::Witness;
 use ark_ff::Field;
-use ark_poly::DenseUVPolynomial;
 use ark_poly::univariate::DensePolynomial;
 
 pub struct Circuit<F: Field> {
