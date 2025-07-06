@@ -357,6 +357,7 @@ dependencies = [
  "ark-poly",
  "ark-std",
  "itertools 0.14.0",
+ "rand_core",
 ]
 
 [[package]]
