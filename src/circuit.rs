@@ -1,8 +1,10 @@
+use ark_bls12_381::Fr;
 use crate::fft::{fft, inverse_fft, vec_to_poly};
 use crate::gate::Gate;
 use crate::permutation::Permutation;
 use crate::witness::Witness;
 use ark_ff::Field;
+use ark_poly::DenseUVPolynomial;
 use ark_poly::univariate::DensePolynomial;
 use itertools::Permutations;
 
@@ -25,9 +27,9 @@ pub struct SelectorPolynomials<F: Field> {
 
 #[derive(Clone, Debug)]
 pub struct WitnessPolynomials<F: Field> {
-    pub a: Vec<F>,
-    pub b: Vec<F>,
-    pub c: Vec<F>,
+    pub a: DensePolynomial<F>,
+    pub b: DensePolynomial<F>,
+    pub c: DensePolynomial<F>,
 }
 
 impl<F: Field> Circuit<F> {
@@ -81,9 +83,9 @@ impl<F: Field> Circuit<F> {
     pub fn get_witness_polynomials(&self) -> WitnessPolynomials<F> {
         let omega = self.domain[1];
         WitnessPolynomials {
-            a: inverse_fft(&self.witness.a, omega),
-            b: inverse_fft(&self.witness.b, omega),
-            c: inverse_fft(&self.witness.c, omega),
+            a: vec_to_poly(inverse_fft(&self.witness.a, omega)),
+            b: vec_to_poly(inverse_fft(&self.witness.b, omega)),
+            c: vec_to_poly(inverse_fft(&self.witness.c, omega)),
         }
     }
 
@@ -130,10 +132,7 @@ impl<F: Field> Circuit<F> {
         selector: &SelectorPolynomials<F>,
         witness: &WitnessPolynomials<F>,
     ) -> DensePolynomial<F> {
-        let a_poly = vec_to_poly(witness.a.clone());
-        let b_poly = vec_to_poly(witness.b.clone());
-        let c_poly = vec_to_poly(witness.c.clone());
-
+        let WitnessPolynomials { a, b, c } = witness;
         let q_l_poly = vec_to_poly(selector.q_l.clone());
         let q_r_poly = vec_to_poly(selector.q_r.clone());
         let q_m_poly = vec_to_poly(selector.q_m.clone());
@@ -141,14 +140,14 @@ impl<F: Field> Circuit<F> {
         let q_c_poly = vec_to_poly(selector.q_c.clone());
 
         // Build each term safely
-        let term_l = vec_to_poly(q_l_poly.naive_mul(&a_poly).coeffs);
-        let term_r = vec_to_poly(q_r_poly.naive_mul(&b_poly).coeffs);
+        let term_l = vec_to_poly(q_l_poly.naive_mul(&a).coeffs);
+        let term_r = vec_to_poly(q_r_poly.naive_mul(&b).coeffs);
         let term_m = vec_to_poly(
             q_m_poly
-                .naive_mul(&vec_to_poly(a_poly.naive_mul(&b_poly).coeffs))
+                .naive_mul(&vec_to_poly(a.naive_mul(&b).coeffs))
                 .coeffs,
         );
-        let term_o = vec_to_poly(q_o_poly.naive_mul(&c_poly).coeffs);
+        let term_o = vec_to_poly(q_o_poly.naive_mul(&c).coeffs);
 
         // Add terms up
         let mut p_poly = term_l;
@@ -158,6 +157,15 @@ impl<F: Field> Circuit<F> {
         p_poly = vec_to_poly((p_poly + q_c_poly).coeffs);
 
         p_poly
+    }
+
+    pub fn vanishing_poly(domain: &[F]) -> DensePolynomial<F> {
+        let mut zh = DensePolynomial::from_coefficients_slice(&[F::one()]);
+        for &root in domain {
+            let x_minus_root = DensePolynomial::from_coefficients_slice(&[-root, F::one()]);
+            zh = zh.naive_mul(&x_minus_root);
+        }
+        zh
     }
 }
 
@@ -178,14 +186,6 @@ mod tests {
     }
     fn fr(n: u64) -> Fr {
         Fr::from(n)
-    }
-    fn vanishing_poly<F: Field>(domain: &[F]) -> DensePolynomial<F> {
-        let mut zh = DensePolynomial::from_coefficients_slice(&[F::one()]);
-        for &root in domain {
-            let x_minus_root = DensePolynomial::from_coefficients_slice(&[-root, F::one()]);
-            zh = zh.naive_mul(&x_minus_root);
-        }
-        zh
     }
 
     #[test]
@@ -231,7 +231,7 @@ mod tests {
         assert!(gate_poly.coeffs.iter().filter(|&x| !x.is_zero()).count() > 0);
 
         // 3. P(x) should be divisible by Z_H(x)
-        let zh = vanishing_poly(&domain);
+        let zh = Circuit::vanishing_poly(&domain);
         let gate_dsp = DenseOrSparsePolynomial::from(gate_poly.clone());
         let zh_dsp = DenseOrSparsePolynomial::from(zh);
         let (_, remainder) = gate_dsp.divide_with_q_and_r(&zh_dsp).unwrap();
@@ -277,7 +277,7 @@ mod tests {
         let gate_poly = circuit.get_gate_constraint_polynomial(&selector, &witness);
         assert!(gate_poly.coeffs.iter().filter(|&x1| !x1.is_zero()).count() > 0);
 
-        let zh = vanishing_poly(&domain);
+        let zh = Circuit::vanishing_poly(&domain);
         let gate_dsp = DenseOrSparsePolynomial::from(gate_poly.clone());
         let zh_dsp = DenseOrSparsePolynomial::from(zh);
         let (t, remainder) = gate_dsp.divide_with_q_and_r(&zh_dsp).unwrap();
