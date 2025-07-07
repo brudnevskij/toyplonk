@@ -1,8 +1,8 @@
-use ark_bls12_381::Fr;
 use crate::fft::{fft, inverse_fft, vec_to_poly};
 use crate::gate::Gate;
 use crate::permutation::Permutation;
 use crate::witness::Witness;
+use ark_bls12_381::Fr;
 use ark_ff::Field;
 use ark_poly::DenseUVPolynomial;
 use ark_poly::univariate::DensePolynomial;
@@ -39,11 +39,10 @@ impl<F: Field> Circuit<F> {
         public_inputs: Vec<F>,
         domain: Vec<F>,
         wiring: Vec<Vec<usize>>,
+        k1: F,
+        k2: F,
     ) -> Circuit<F> {
-        let permutation = Permutation {
-            witness: witness.clone(),
-            wiring,
-        };
+        let permutation = Permutation::new(witness.clone(), wiring, k1, k2);
         Circuit {
             gates,
             witness,
@@ -217,6 +216,8 @@ mod tests {
             public_inputs,
             domain.clone(),
             Vec::new(),
+            fr(2),
+            fr(3),
         );
 
         // Selector and witness polynomials
@@ -266,7 +267,15 @@ mod tests {
         };
 
         let public_inputs = vec![];
-        let circuit = Circuit::new(gates, witness, public_inputs, domain.clone(), vec![]);
+        let circuit = Circuit::new(
+            gates,
+            witness,
+            public_inputs,
+            domain.clone(),
+            vec![],
+            fr(3),
+            fr(3),
+        );
 
         // Checking if CS is satisfied
         let selector = circuit.get_selector_polynomials();
