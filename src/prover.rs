@@ -1,8 +1,8 @@
 use crate::circuit::{Circuit, WitnessPolynomials};
-use ark_ec::pairing::{Pairing};
+use crate::fft::vec_to_poly;
+use ark_ec::pairing::Pairing;
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_poly::univariate::DensePolynomial;
-use crate::fft::vec_to_poly;
 
 pub struct KZGProver<E: Pairing> {
     crs: Vec<E::G1Affine>,
@@ -11,35 +11,81 @@ pub struct KZGProver<E: Pairing> {
     g2: E::G1Affine,
 }
 
-
 impl<E: Pairing> KZGProver<E> {
-    pub fn generate_proof(&self, circuit: Circuit<E::ScalarField>, blinding_scalars: &[E::ScalarField]) {
+    pub fn generate_proof(
+        &self,
+        circuit: Circuit<E::ScalarField>,
+        blinding_scalars: &[E::ScalarField],
+        beta: E::ScalarField,
+        gamma: E::ScalarField,
+    ) {
         let n = circuit.gates.len();
         assert_eq!(blinding_scalars.len(), 9);
-        assert_eq!(self.crs.len(), n+5);
+        assert_eq!(self.crs.len(), n + 5);
 
         let selector_polynomials = circuit.get_selector_polynomials();
         let vanishing_poly = Circuit::vanishing_poly(&self.domain);
-        let WitnessPolynomials{ a, b, c }= circuit.get_witness_polynomials();
+        let WitnessPolynomials { a, b, c } = circuit.get_witness_polynomials();
 
         // round one, computing wire polynomials
-        let a_poly = Self::compute_wire_coefficients_form(blinding_scalars[0], blinding_scalars[1], &a, &vanishing_poly);
+        let a_poly = Self::compute_wire_coefficients_form(
+            blinding_scalars[0],
+            blinding_scalars[1],
+            &a,
+            &vanishing_poly,
+        );
         let a_commitment = Self::commit_polynomial(&a_poly, &self.crs, self.g1);
 
-        let b_poly = Self::compute_wire_coefficients_form(blinding_scalars[2], blinding_scalars[3], &b, &vanishing_poly);
+        let b_poly = Self::compute_wire_coefficients_form(
+            blinding_scalars[2],
+            blinding_scalars[3],
+            &b,
+            &vanishing_poly,
+        );
         let b_commitment = Self::commit_polynomial(&b_poly, &self.crs, self.g1);
 
-        let c_poly = Self::compute_wire_coefficients_form(blinding_scalars[4], blinding_scalars[5], &c, &vanishing_poly);
+        let c_poly = Self::compute_wire_coefficients_form(
+            blinding_scalars[4],
+            blinding_scalars[5],
+            &c,
+            &vanishing_poly,
+        );
         let c_commitment = Self::commit_polynomial(&c_poly, &self.crs, self.g1);
+
+        // round two, computing permutation poly
+        let rolling_product = circuit
+            .permutation
+            .get_rolling_product(gamma, beta, &self.domain);
+        let z = Self::compute_permutation_polynomial(
+            blinding_scalars[6],
+            blinding_scalars[7],
+            blinding_scalars[8],
+            &vanishing_poly,
+            &rolling_product,
+        );
+
+        let z_commit = Self::commit_polynomial(&z, &self.crs, self.g1);
+    }
+
+    fn compute_permutation_polynomial(
+        b7: E::ScalarField,
+        b8: E::ScalarField,
+        b9: E::ScalarField,
+        vanishing_poly: &DensePolynomial<E::ScalarField>,
+        rolling_product: &DensePolynomial<E::ScalarField>,
+    ) -> DensePolynomial<E::ScalarField> {
+        let blinding_poly = vec_to_poly(vec![b9, b8, b7]);
+        let blinding_poly = blinding_poly.naive_mul(vanishing_poly);
+        blinding_poly + rolling_product.clone()
     }
 
     fn compute_wire_coefficients_form(
         b1: E::ScalarField,
         b2: E::ScalarField,
         witness: &DensePolynomial<E::ScalarField>,
-        zh_eval: &DensePolynomial<E::ScalarField>,
+        vanishing_polynomial: &DensePolynomial<E::ScalarField>,
     ) -> DensePolynomial<E::ScalarField> {
-        let blinding_poly = vec_to_poly(vec![b2, b1]).naive_mul(&zh_eval);
+        let blinding_poly = vec_to_poly(vec![b2, b1]).naive_mul(&vanishing_polynomial);
         blinding_poly + witness.clone()
     }
 
@@ -56,7 +102,6 @@ impl<E: Pairing> KZGProver<E> {
 
         acc.into_affine()
     }
-
 }
 
 #[cfg(test)]
@@ -64,8 +109,8 @@ mod tests {
     use super::*;
     use ark_bls12_381::{Bls12_381, Fr, G1Projective};
     use ark_ff::Field;
+    use ark_poly::DenseUVPolynomial;
     use ark_poly::univariate::DensePolynomial;
-    use ark_poly::{DenseUVPolynomial};
     use ark_std::UniformRand;
     use ark_std::test_rng;
 
@@ -74,9 +119,9 @@ mod tests {
     }
 
     fn dummy_crs<E: Pairing>(degree: usize) -> (Vec<E::G1Affine>, Vec<E::G2Affine>) {
-        use ark_std::test_rng;
         use ark_ec::Group;
         use ark_ff::UniformRand;
+        use ark_std::test_rng;
 
         let mut rng = test_rng();
         let tau = E::ScalarField::rand(&mut rng);
@@ -100,7 +145,12 @@ mod tests {
         let zh = Circuit::vanishing_poly(&domain);
 
         let witness_poly = DensePolynomial::from_coefficients_vec(vec![fr(5), fr(0), fr(0)]);
-        let blinded = KZGProver::<Bls12_381>::compute_wire_coefficients_form(fr(2), fr(3), &witness_poly, &zh);
+        let blinded = KZGProver::<Bls12_381>::compute_wire_coefficients_form(
+            fr(2),
+            fr(3),
+            &witness_poly,
+            &zh,
+        );
 
         // blinded(X) = witness + (3 + 2X)*Zh(X)
         let blind_term = DensePolynomial::from_coefficients_vec(vec![fr(3), fr(2)]).naive_mul(&zh);
@@ -112,7 +162,7 @@ mod tests {
     #[test]
     fn test_commit_polynomial_linear_combination() {
         let mut rng = test_rng();
-        let (crs1,crs2) = dummy_crs::<Bls12_381>(3);
+        let (crs1, crs2) = dummy_crs::<Bls12_381>(3);
         let g1 = G1Projective::rand(&mut rng).into_affine();
 
         let poly1 = DensePolynomial::from_coefficients_vec(vec![fr(1), fr(2)]);

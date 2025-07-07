@@ -114,7 +114,7 @@ impl<F: Field> Permutation<F> {
     }
 
     // convenience function producing rolling product
-    fn get_rolling_product(&self, gamma: F, beta: F, domain: &[F]) -> DensePolynomial<F> {
+    pub fn get_rolling_product(&self, gamma: F, beta: F, domain: &[F]) -> DensePolynomial<F> {
         let sigma_maps = self.get_sigma_maps();
         let sigma_polys = self.get_sigma_polynomials(sigma_maps.clone(), domain);
         self.calculate_rolling_product(sigma_polys, &domain, gamma, beta)
