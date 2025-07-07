@@ -13,11 +13,11 @@ pub struct Permutation<F: Field> {
 }
 
 impl<F: Field> Permutation<F> {
-    fn new(witness: Witness<F>, wiring: Vec<Vec<usize>>) -> Permutation<F> {
+    pub fn new(witness: Witness<F>, wiring: Vec<Vec<usize>>) -> Permutation<F> {
         Self { witness, wiring }
     }
 
-    fn generate_sigma_mapping(&self) -> Vec<usize> {
+    pub fn generate_sigma_mapping(&self) -> Vec<usize> {
         let n = self.witness.a.len();
         let mut sigma_map: Vec<_> = (0..3 * n).collect();
 
@@ -34,7 +34,7 @@ impl<F: Field> Permutation<F> {
         sigma_map
     }
 
-    fn get_sigma_maps(&self) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
+    pub fn get_sigma_maps(&self) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
         let sigma = self.generate_sigma_mapping();
         let n = self.witness.a.len();
         let a_sigma = sigma[..n].to_vec();
@@ -44,13 +44,13 @@ impl<F: Field> Permutation<F> {
         (a_sigma, b_sigma, c_sigma)
     }
 
-    fn get_sigma_polynomials(
+    pub fn get_sigma_polynomials(
         &self,
         k1: F,
         k2: F,
         mappings: (Vec<usize>, Vec<usize>, Vec<usize>),
         domain: &Vec<F>,
-    ) -> (Vec<F>, Vec<F>, Vec<F>) {
+    ) -> (DensePolynomial<F>, DensePolynomial<F>, DensePolynomial<F>) {
         let omega = domain[1];
 
         let b_coset = domain.iter().map(|&x| k1 * x).collect::<Vec<_>>();
@@ -64,30 +64,24 @@ impl<F: Field> Permutation<F> {
         let b_evaluations = mappings.1.iter().map(|&i| h_prime[i]).collect::<Vec<_>>();
         let c_evaluations = mappings.2.iter().map(|&i| h_prime[i]).collect::<Vec<_>>();
 
-        let a_sigma = inverse_fft(&a_evaluations, omega);
-        let b_sigma = inverse_fft(&b_evaluations, omega);
-        let c_sigma = inverse_fft(&c_evaluations, omega);
+        let a_sigma = vec_to_poly(inverse_fft(&a_evaluations, omega));
+        let b_sigma = vec_to_poly(inverse_fft(&b_evaluations, omega));
+        let c_sigma = vec_to_poly(inverse_fft(&c_evaluations, omega));
 
         (a_sigma, b_sigma, c_sigma)
     }
 
-    fn calculate_rolling_product(
+    pub fn calculate_rolling_product(
         &self,
         k1: F,
         k2: F,
-        sigma_polys: (Vec<F>, Vec<F>, Vec<F>),
+        sigma_polys: (DensePolynomial<F>, DensePolynomial<F>, DensePolynomial<F>),
         domain: &Vec<F>,
         gamma: F,
         beta: F,
-    ) -> Vec<F> {
+    ) -> DensePolynomial<F> {
         let omega = domain[1];
-
-        // coefficients
-        let (a_sigma_coefficients, b_sigma_coefficients, c_sigma_coefficients) = sigma_polys;
-
-        let a_sigma = vec_to_poly(a_sigma_coefficients);
-        let b_sigma = vec_to_poly(b_sigma_coefficients);
-        let c_sigma = vec_to_poly(c_sigma_coefficients);
+        let (a_sigma, b_sigma, c_sigma) = sigma_polys;
 
         let mut z_evaluations = vec![F::one()];
         let a = &self.witness.a;
@@ -111,7 +105,7 @@ impl<F: Field> Permutation<F> {
 
         z_evaluations = z_evaluations[1..].to_vec();
 
-        inverse_fft(&z_evaluations, omega)
+        vec_to_poly(inverse_fft(&z_evaluations, omega))
     }
 }
 
@@ -387,11 +381,11 @@ mod tests {
 
         let witness = Witness {
             a: vec![fr(1), fr(2), fr(3), fr(4)],
-            b: vec![fr(5), fr(6), fr(7), fr(8)],
+            b: vec![fr(1), fr(6), fr(7), fr(8)],
             c: vec![fr(9), fr(10), fr(11), fr(12)],
         };
 
-        let wiring = vec![];
+        let wiring = vec![vec![0, 5]];
         let perm = Permutation::new(witness.clone(), wiring);
         let sigma_maps = perm.get_sigma_maps();
 
