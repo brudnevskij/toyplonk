@@ -10,11 +10,18 @@ use itertools::izip;
 pub struct Permutation<F: Field> {
     pub witness: Witness<F>,
     pub wiring: Vec<Vec<usize>>,
+    k1: F,
+    k2: F,
 }
 
 impl<F: Field> Permutation<F> {
-    pub fn new(witness: Witness<F>, wiring: Vec<Vec<usize>>) -> Permutation<F> {
-        Self { witness, wiring }
+    pub fn new(witness: Witness<F>, wiring: Vec<Vec<usize>>, k1: F, k2: F) -> Permutation<F> {
+        Self {
+            witness,
+            wiring,
+            k1,
+            k2,
+        }
     }
 
     pub fn generate_sigma_mapping(&self) -> Vec<usize> {
@@ -46,17 +53,15 @@ impl<F: Field> Permutation<F> {
 
     pub fn get_sigma_polynomials(
         &self,
-        k1: F,
-        k2: F,
         mappings: (Vec<usize>, Vec<usize>, Vec<usize>),
-        domain: &Vec<F>,
+        domain: &[F],
     ) -> (DensePolynomial<F>, DensePolynomial<F>, DensePolynomial<F>) {
         let omega = domain[1];
 
-        let b_coset = domain.iter().map(|&x| k1 * x).collect::<Vec<_>>();
-        let c_coset = domain.iter().map(|&x| k2 * x).collect::<Vec<_>>();
+        let b_coset = domain.iter().map(|&x| self.k1 * x).collect::<Vec<_>>();
+        let c_coset = domain.iter().map(|&x| self.k2 * x).collect::<Vec<_>>();
 
-        let mut h_prime = domain.clone(); // h
+        let mut h_prime = Vec::from(domain.clone()); // h
         h_prime.extend(b_coset); // h ∪ k1·h
         h_prime.extend(c_coset); // ∪ k2·h
 
@@ -71,12 +76,12 @@ impl<F: Field> Permutation<F> {
         (a_sigma, b_sigma, c_sigma)
     }
 
+    // Calculates rolling product and outputs interpolation with
+    // [Z1,..., Zn] values.
     pub fn calculate_rolling_product(
         &self,
-        k1: F,
-        k2: F,
         sigma_polys: (DensePolynomial<F>, DensePolynomial<F>, DensePolynomial<F>),
-        domain: &Vec<F>,
+        domain: &[F],
         gamma: F,
         beta: F,
     ) -> DensePolynomial<F> {
@@ -91,8 +96,8 @@ impl<F: Field> Permutation<F> {
         // calculating all Z(x) evals except last one.
         for i in 0..self.witness.a.len() {
             let a_num = a[i] + beta * domain[i] + gamma;
-            let b_num = b[i] + beta * domain[i] * k1 + gamma;
-            let c_num = c[i] + beta * domain[i] * k2 + gamma;
+            let b_num = b[i] + beta * domain[i] * self.k1 + gamma;
+            let c_num = c[i] + beta * domain[i] * self.k2 + gamma;
             let numerator = a_num * b_num * c_num;
 
             let a_denom = a[i] + beta * a_sigma.evaluate(&domain[i]) + gamma;
@@ -106,6 +111,13 @@ impl<F: Field> Permutation<F> {
         z_evaluations = z_evaluations[1..].to_vec();
 
         vec_to_poly(inverse_fft(&z_evaluations, omega))
+    }
+
+    // convenience function producing rolling product
+    fn get_rolling_product(&self, gamma: F, beta: F, domain: &[F]) -> DensePolynomial<F> {
+        let sigma_maps = self.get_sigma_maps();
+        let sigma_polys = self.get_sigma_polynomials(sigma_maps.clone(), domain);
+        self.calculate_rolling_product(sigma_polys, &domain, gamma, beta)
     }
 }
 
@@ -196,7 +208,7 @@ mod tests {
         // b0 = a1      → [1, 3]
         let wiring = vec![vec![0, 4, 8], vec![1, 3]];
 
-        let permutation = Permutation::new(witness, wiring);
+        let permutation = Permutation::new(witness, wiring, fr(2), fr(3));
 
         // Test full sigma mapping
         let sigma = permutation.generate_sigma_mapping();
@@ -223,7 +235,7 @@ mod tests {
         };
         let wiring = vec![];
 
-        let permutation = Permutation::new(witness, wiring);
+        let permutation = Permutation::new(witness, wiring, fr(2), fr(3));
 
         let sigma = permutation.generate_sigma_mapping();
         assert_eq!(sigma, (0..6).collect::<Vec<_>>());
@@ -251,12 +263,11 @@ mod tests {
                 c: vec![],
             },
             wiring: vec![],
+            k1: fr(2),
+            k2: fr(3),
         };
-        let k1 = Fr::from(2u64);
-        let k2 = Fr::from(3u64);
 
-        let (a_sigma, b_sigma, c_sigma) =
-            perm.get_sigma_polynomials(k1, k2, mappings.clone(), &domain);
+        let (a_sigma, b_sigma, c_sigma) = perm.get_sigma_polynomials(mappings.clone(), &domain);
 
         let eval_a = fft(&a_sigma, domain[1]);
         let eval_b = fft(&b_sigma, domain[1]);
@@ -288,22 +299,24 @@ mod tests {
             c: vec![fr(9), fr(10), fr(11), fr(12)],
         };
 
+        let k1 = Fr::from(2u64);
+        let k2 = Fr::from(3u64);
         let wiring = vec![vec![0, 5], vec![2, 7, 9]]; // i.e., sigma[i] = i
         let perm = Permutation {
             witness: witness.clone(),
             wiring,
+            k1,
+            k2,
         };
 
         // Identity sigma maps
         let sigma_maps = perm.get_sigma_maps();
 
-        let k1 = Fr::from(2u64);
-        let k2 = Fr::from(3u64);
-        let sigma_polys = perm.get_sigma_polynomials(k1, k2, sigma_maps.clone(), &domain);
+        let sigma_polys = perm.get_sigma_polynomials(sigma_maps.clone(), &domain);
 
         let gamma = fr(13);
         let beta = fr(17);
-        let z_poly = perm.calculate_rolling_product(k1, k2, sigma_polys, &domain, gamma, beta);
+        let z_poly = perm.calculate_rolling_product(sigma_polys, &domain, gamma, beta);
 
         // Forward FFT of Z(X) to get back evaluations
         let z_eval = fft(&z_poly, domain[1]);
@@ -344,17 +357,17 @@ mod tests {
         // wire indexing: a_i = i, b_i = n + i, c_i = 2n + i
         let wiring = vec![vec![0, 10, 20], vec![1, 9], vec![16, 21]];
 
-        let perm = Permutation::new(witness.clone(), wiring);
+        let k1 = fr(2);
+        let k2 = fr(3);
+        let perm = Permutation::new(witness.clone(), wiring, k1, k2);
 
         let sigma_maps = perm.get_sigma_maps();
 
-        let k1 = fr(2);
-        let k2 = fr(3);
         let gamma = fr(9);
         let beta = fr(6);
 
-        let sigma_polys = perm.get_sigma_polynomials(k1, k2, sigma_maps.clone(), &domain);
-        let z_poly = perm.calculate_rolling_product(k1, k2, sigma_polys, &domain, gamma, beta);
+        let sigma_polys = perm.get_sigma_polynomials(sigma_maps.clone(), &domain);
+        let z_poly = perm.calculate_rolling_product(sigma_polys, &domain, gamma, beta);
 
         // Z evals
         let z_eval = fft(&z_poly, domain[1]);
@@ -386,16 +399,17 @@ mod tests {
         };
 
         let wiring = vec![vec![0, 5]];
-        let perm = Permutation::new(witness.clone(), wiring);
-        let sigma_maps = perm.get_sigma_maps();
 
         let k1 = fr(2);
         let k2 = fr(3);
+        let perm = Permutation::new(witness.clone(), wiring, k1, k2);
+        let sigma_maps = perm.get_sigma_maps();
+
         let beta = fr(6);
         let gamma = fr(9);
 
-        let sigma_polys = perm.get_sigma_polynomials(k1, k2, sigma_maps.clone(), &domain);
-        let mut z_poly = perm.calculate_rolling_product(k1, k2, sigma_polys, &domain, gamma, beta);
+        let sigma_polys = perm.get_sigma_polynomials(sigma_maps.clone(), &domain);
+        let mut z_poly = perm.calculate_rolling_product(sigma_polys, &domain, gamma, beta);
 
         // Tamper Z polynomial
         z_poly[1] += fr(1);
