@@ -77,7 +77,7 @@ impl<F: Field> Permutation<F> {
     }
 
     // Calculates rolling product and outputs interpolation with
-    // [Z1,..., Zn] values.
+    // [Z0,..., Zn-1] values.
     pub fn calculate_rolling_product(
         &self,
         sigma_polys: (DensePolynomial<F>, DensePolynomial<F>, DensePolynomial<F>),
@@ -108,7 +108,7 @@ impl<F: Field> Permutation<F> {
             z_evaluations.push(z_evaluations.last().unwrap().clone() * (numerator / denominator));
         }
 
-        z_evaluations = z_evaluations[1..].to_vec();
+        z_evaluations = z_evaluations[..z_evaluations.len() - 1].to_vec();
 
         vec_to_poly(inverse_fft(&z_evaluations, omega))
     }
@@ -131,7 +131,6 @@ pub fn verify_permutation_argument<F: Field>(
     beta: F,
     gamma: F,
 ) -> Result<(), String> {
-    let omega = domain[1];
     let n = domain.len();
     let a = &witness.a;
     let b = &witness.b;
@@ -169,12 +168,19 @@ pub fn verify_permutation_argument<F: Field>(
         let next = expected[i] * (numerator / denominator);
         expected.push(next);
 
-        if z_evals[i] != next {
+        if z_evals[i] != expected[i] {
             return Err(format!(
                 "Permutation recurrence mismatch at i = {}:\nexpected {}\nbut got {}",
                 i, next, z_evals[i]
             ));
         }
+    }
+
+    if expected.last() != Some(&F::one()) {
+        return Err(format!(
+            "Last Z(w^n) != 1, Z(w^n) = {}",
+            expected.last().unwrap()
+        ));
     }
     Ok(())
 }
@@ -323,7 +329,7 @@ mod tests {
 
         // Check recurrence:
         assert_eq!(z_eval.len(), domain.len());
-        assert_eq!(z_eval[z_eval.len() - 1], Fr::one());
+        assert_eq!(z_eval[0], Fr::one());
 
         let result = verify_permutation_argument(
             &domain,
@@ -372,7 +378,7 @@ mod tests {
         // Z evals
         let z_eval = fft(&z_poly, domain[1]);
         assert_eq!(z_eval.len(), domain.len());
-        assert_eq!(z_eval[z_eval.len() - 1], fr(1)); // last value usually settles
+        assert_eq!(z_eval[0], fr(1));
 
         let result = verify_permutation_argument(
             &domain,
