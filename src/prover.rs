@@ -107,10 +107,12 @@ impl<E: Pairing> KZGProver<E> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::permutation::Permutation;
+    use crate::witness::Witness;
     use ark_bls12_381::{Bls12_381, Fr, G1Projective};
-    use ark_ff::Field;
-    use ark_poly::DenseUVPolynomial;
+    use ark_ff::{FftField, Field, One};
     use ark_poly::univariate::DensePolynomial;
+    use ark_poly::{DenseUVPolynomial, Polynomial};
     use ark_std::UniformRand;
     use ark_std::test_rng;
 
@@ -178,5 +180,66 @@ mod tests {
         let c_sum_proj = c_sum.into_group();
 
         assert_eq!(c1_proj + c2_proj, c_sum_proj);
+    }
+
+    #[test]
+    fn test_permutation_argument_rolling_product_validity() {
+        let n = 4;
+        let omega = Fr::get_root_of_unity(n as u64).unwrap();
+        let domain: Vec<Fr> = (0..n).map(|i| omega.pow([i as u64])).collect();
+        let k1 = fr(5);
+        let k2 = fr(7);
+        let mut rng = test_rng();
+        let beta = Fr::rand(&mut rng);
+        let gamma = Fr::rand(&mut rng);
+
+        // Simple wire permutation — swap a few values
+        let wiring = vec![
+            vec![0, 3], // a_0 == a_1 => σ(0) = 4
+            vec![4, 7],
+            vec![8, 11],
+        ];
+
+        let witness = Witness {
+            a: vec![Fr::from(3); n],
+            b: vec![Fr::from(4); n],
+            c: vec![Fr::from(5); n],
+        };
+
+        let permutation = Permutation::new(witness.clone(), wiring.clone(), k1, k2);
+
+        let sigma_maps = permutation.get_sigma_maps();
+        let (sigma_a, sigma_b, sigma_c) = permutation.get_sigma_polynomials(sigma_maps, &domain);
+
+        let rolling_product_poly = permutation.get_rolling_product(gamma, beta, &domain);
+        let z_evals = crate::fft::fft(&rolling_product_poly.coeffs, domain[1]);
+
+        // 1. Last value is 1
+        println!("z evals: {:?}", z_evals);
+        assert_eq!(z_evals[0], Fr::one());
+
+        // 2. Recurrence holds for 1..n-1
+        let mut expected = vec![Fr::one()];
+        for i in 0..n - 1 {
+            let x = domain[i];
+            let a = witness.a[i];
+            let b = witness.b[i];
+            let c = witness.c[i];
+
+            let num =
+                (a + beta * x + gamma) * (b + beta * k1 * x + gamma) * (c + beta * k2 * x + gamma);
+
+            let a_s = sigma_a.evaluate(&x);
+            let b_s = sigma_b.evaluate(&x);
+            let c_s = sigma_c.evaluate(&x);
+
+            let den =
+                (a + beta * a_s + gamma) * (b + beta * b_s + gamma) * (c + beta * c_s + gamma);
+
+            expected.push(expected[i] * num / den);
+            let actual = z_evals[i + 1];
+
+            assert_eq!(expected[i + 1], actual, "Mismatch at i = {}", i);
+        }
     }
 }
