@@ -166,6 +166,17 @@ impl<F: Field> Circuit<F> {
         }
         zh
     }
+
+    // Computes PI(x), pads evaluations with 0 for ifft
+    fn compute_public_input_polynomial(&self) -> DensePolynomial<F> {
+        let mut evaluations = vec![F::zero(); self.domain.len()];
+        for (i, &x) in self.public_inputs.iter().enumerate() {
+            evaluations[i] = -x;
+        }
+
+        vec_to_poly(inverse_fft(&evaluations, self.domain[1]))
+    }
+
 }
 
 #[cfg(test)]
