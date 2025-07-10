@@ -1,6 +1,7 @@
 use ark_ff::Field;
 use ark_poly::DenseUVPolynomial;
 use ark_poly::univariate::DensePolynomial;
+use itertools::Itertools;
 
 /// Recursive Cooley–Tukey FFT over a finite field
 ///
@@ -73,6 +74,14 @@ pub fn vec_to_poly<F: Field>(mut coeffs: Vec<F>) -> DensePolynomial<F> {
     }
 
     DensePolynomial::from_coefficients_vec(coeffs)
+}
+
+pub fn pad_with_zeroes<F: Field>(coeffs: &[F], domain_size: usize) -> Vec<F> {
+    coeffs
+        .to_vec()
+        .into_iter()
+        .pad_using(domain_size, |_| F::zero())
+        .collect()
 }
 
 #[cfg(test)]
