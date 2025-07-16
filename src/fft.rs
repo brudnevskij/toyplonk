@@ -84,6 +84,17 @@ pub fn pad_with_zeroes<F: Field>(coeffs: &[F], domain_size: usize) -> Vec<F> {
         .collect()
 }
 
+pub fn compute_lagrange_base<F: Field>(order: usize, domain: &[F]) -> DensePolynomial<F> {
+    assert!(
+        order > 0 && order <= domain.len(),
+        "order must be within domain length"
+    );
+
+    let mut lagrange_evaluations = vec![F::zero(); domain.len()];
+    lagrange_evaluations[order - 1] = F::one();
+
+    vec_to_poly(inverse_fft(lagrange_evaluations.as_slice(), domain[1]))
+}
 #[cfg(test)]
 mod tests {
     use super::*;
