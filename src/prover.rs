@@ -1,8 +1,12 @@
 use crate::circuit::{Circuit, WitnessPolynomials};
-use crate::fft::vec_to_poly;
+use crate::fft::{compute_lagrange_base, vec_to_poly};
+use crate::witness;
 use ark_ec::pairing::Pairing;
 use ark_ec::{AffineRepr, CurveGroup};
-use ark_poly::univariate::DensePolynomial;
+use ark_ff::{Field, One, Zero};
+use ark_poly::DenseUVPolynomial;
+use ark_poly::univariate::{DenseOrSparsePolynomial, DensePolynomial};
+use std::ops::{Add, Mul, Sub};
 
 pub struct KZGProver<E: Pairing> {
     crs: Vec<E::G1Affine>,
@@ -18,14 +22,17 @@ impl<E: Pairing> KZGProver<E> {
         blinding_scalars: &[E::ScalarField],
         beta: E::ScalarField,
         gamma: E::ScalarField,
+        alpha: E::ScalarField,
     ) {
         let n = circuit.gates.len();
-        assert_eq!(blinding_scalars.len(), 9);
+        assert_eq!(blinding_scalars.len(), 11);
         assert_eq!(self.crs.len(), n + 5);
 
-        let selector_polynomials = circuit.get_selector_polynomials();
         let vanishing_poly = Circuit::vanishing_poly(&self.domain);
-        let WitnessPolynomials { a, b, c } = circuit.get_witness_polynomials();
+        let witness_polynomial = circuit.get_witness_polynomials();
+        let a = witness_polynomial.a.clone();
+        let b = witness_polynomial.b.clone();
+        let c = witness_polynomial.c.clone();
 
         // round one, computing wire polynomials
         let a_poly = Self::compute_wire_coefficients_form(
@@ -64,7 +71,206 @@ impl<E: Pairing> KZGProver<E> {
             &rolling_product,
         );
 
-        let z_commit = Self::commit_polynomial(&z, &self.crs, self.g1);
+        let z_commitment = Self::commit_polynomial(&z, &self.crs, self.g1);
+
+        // round three, computing quotient polynomial
+        // first summand
+
+        let gcp = DenseOrSparsePolynomial::from(circuit.get_gate_constraint_polynomial());
+        let zh = DenseOrSparsePolynomial::from(vanishing_poly.clone());
+        let (first_summand, r) = gcp.divide_with_q_and_r(&zh).unwrap();
+
+        assert!(
+            r.is_zero(),
+            "gate constraint has non zero remainder: {:?}",
+            r
+        );
+
+        let permutation_summand_1 = self.compute_first_permutation_summand(
+            witness_polynomial.clone(),
+            beta,
+            gamma,
+            circuit.permutation.k1,
+            circuit.permutation.k2,
+            &z,
+            &vanishing_poly,
+            alpha,
+        );
+
+        // second summand, permutation 2
+        let sigma_maps = circuit.permutation.get_sigma_maps();
+        let sigma_polynomials = circuit
+            .permutation
+            .generate_sigma_polynomials(sigma_maps, &self.domain);
+        let permutation_summand_2 = self.compute_second_permutation_summand(
+            witness_polynomial.clone(),
+            sigma_polynomials,
+            beta,
+            gamma,
+            &z,
+            &vanishing_poly,
+            alpha,
+        );
+
+        let lagrange_base_1 = compute_lagrange_base(1, &self.domain);
+        let last_summand = self.compute_last_summand(alpha, &vanishing_poly, &z, &lagrange_base_1);
+
+        let quotient_polynomial = first_summand
+            .add(permutation_summand_1)
+            .sub(&permutation_summand_2)
+            + last_summand;
+
+        let (t_lo, t_mid, t_hi) = Self::split_quotient_polynomial(
+            &quotient_polynomial,
+            blinding_scalars[9],
+            blinding_scalars[10],
+            self.domain.len(),
+        );
+
+        let t_lo_commitment = Self::commit_polynomial(&t_lo, &self.crs, self.g1);
+        let t_mid_commitment = Self::commit_polynomial(&t_mid, &self.crs, self.g1);
+        let t_hi_commitment = Self::commit_polynomial(&t_hi, &self.crs, self.g1);
+    }
+
+    fn compute_first_permutation_summand(
+        &self,
+        witness_polynomials: WitnessPolynomials<E::ScalarField>,
+        beta: E::ScalarField,
+        gamma: E::ScalarField,
+        k1: E::ScalarField,
+        k2: E::ScalarField,
+        z: &DensePolynomial<E::ScalarField>,
+        vanishing_poly: &DensePolynomial<E::ScalarField>,
+        alpha: E::ScalarField,
+    ) -> DensePolynomial<E::ScalarField> {
+        let WitnessPolynomials { a, b, c } = witness_polynomials;
+        let a_multiply = vec_to_poly(vec![gamma, beta]) + a;
+        let b_multiply = vec_to_poly(vec![gamma, beta * k1]) + b;
+        let c_multiply = vec_to_poly(vec![gamma, beta * k2]) + c;
+
+        let permutation_portion = a_multiply
+            .naive_mul(&b_multiply)
+            .naive_mul(&c_multiply)
+            .naive_mul(&z)
+            .mul(alpha);
+
+        let (permutation_summand, r) = DenseOrSparsePolynomial::from(permutation_portion)
+            .divide_with_q_and_r(&vanishing_poly.into())
+            .unwrap();
+        assert!(
+            r.is_zero(),
+            "permutation summand 1 remainder is nonzero: {:?}",
+            r
+        );
+
+        permutation_summand
+    }
+
+    fn compute_second_permutation_summand(
+        &self,
+        witness_polynomials: WitnessPolynomials<E::ScalarField>,
+        sigma_polynomials: (
+            DensePolynomial<E::ScalarField>,
+            DensePolynomial<E::ScalarField>,
+            DensePolynomial<E::ScalarField>,
+        ),
+        beta: E::ScalarField,
+        gamma: E::ScalarField,
+        z: &DensePolynomial<E::ScalarField>,
+        vanishing_poly: &DensePolynomial<E::ScalarField>,
+        alpha: E::ScalarField,
+    ) -> DensePolynomial<E::ScalarField> {
+        let WitnessPolynomials { a, b, c } = witness_polynomials;
+        let (sigma_1, sigma_2, sigma_3) = sigma_polynomials;
+
+        let gamma_constant_poly = vec_to_poly(vec![gamma]);
+        let a_multiply = a + sigma_1.mul(beta) + gamma_constant_poly.clone();
+        let b_multiply = b + sigma_2.mul(beta) + gamma_constant_poly.clone();
+        let c_multiply = c + sigma_3.mul(beta) + gamma_constant_poly;
+
+        let mut shifted_z = z.clone();
+        let omega = self.domain[1];
+        for i in 1..shifted_z.len() {
+            shifted_z[i] *= omega.pow(&[i as u64]);
+        }
+
+        let permutation_portion = a_multiply
+            .naive_mul(&b_multiply)
+            .naive_mul(&c_multiply)
+            .naive_mul(&shifted_z)
+            .mul(alpha);
+
+        let (permutation_summand, r) = DenseOrSparsePolynomial::from(permutation_portion)
+            .divide_with_q_and_r(&vanishing_poly.into())
+            .unwrap();
+        assert!(
+            r.is_zero(),
+            "permutation summand 1 remainder is nonzero: {:?}",
+            r
+        );
+
+        permutation_summand
+    }
+
+    fn compute_last_summand(
+        &self,
+        alpha: E::ScalarField,
+        vanishing_polynomial: &DensePolynomial<E::ScalarField>,
+        z: &DensePolynomial<E::ScalarField>,
+        lagrange_basis_1: &DensePolynomial<E::ScalarField>,
+    ) -> DensePolynomial<E::ScalarField> {
+        let last_summand = z
+            .add(&vec_to_poly(vec![-E::ScalarField::one()]))
+            .naive_mul(lagrange_basis_1)
+            .mul(&vec_to_poly(vec![alpha.pow(&[2u64])]));
+
+        let (last_summand, r) = DenseOrSparsePolynomial::from(last_summand)
+            .divide_with_q_and_r(&vanishing_polynomial.into())
+            .unwrap();
+        assert!(r.is_zero(), "last summand 1 remainder is nonzero: {:?}", r);
+
+        last_summand
+    }
+
+    fn split_quotient_polynomial(
+        t: &DensePolynomial<E::ScalarField>,
+        b10: E::ScalarField,
+        b11: E::ScalarField,
+        n: usize,
+    ) -> (
+        DensePolynomial<E::ScalarField>,
+        DensePolynomial<E::ScalarField>,
+        DensePolynomial<E::ScalarField>,
+    ) {
+        let mut t_lo_prime = Vec::new();
+        let mut t_mid_prime = Vec::new();
+        let mut t_hi_prime = Vec::new();
+
+        for (i, c) in t.coeffs().iter().enumerate() {
+            if i < n {
+                t_lo_prime.push(c.clone());
+            }
+            if i >= n && i < 2 * n {
+                t_mid_prime.push(c.clone());
+            }
+            if i >= 2 * n {
+                t_hi_prime.push(c.clone());
+            }
+        }
+
+        let mut t_lo = vec![E::ScalarField::zero(); n + 1];
+        t_lo[n] = b10;
+        let t_lo = vec_to_poly(t_lo).add(vec_to_poly(t_lo_prime));
+
+        let mut t_mid = vec![E::ScalarField::zero(); n + 1];
+        t_mid[0] = -b10;
+        t_mid[n] = b11;
+        let t_mid = vec_to_poly(t_mid).add(vec_to_poly(t_mid_prime));
+
+        let t_hi = vec![-b11];
+        let t_hi = vec_to_poly(t_hi).add(vec_to_poly(t_hi_prime));
+
+        (t_lo, t_mid, t_hi)
     }
 
     fn compute_permutation_polynomial(
@@ -209,7 +415,8 @@ mod tests {
         let permutation = Permutation::new(witness.clone(), wiring.clone(), k1, k2);
 
         let sigma_maps = permutation.get_sigma_maps();
-        let (sigma_a, sigma_b, sigma_c) = permutation.get_sigma_polynomials(sigma_maps, &domain);
+        let (sigma_a, sigma_b, sigma_c) =
+            permutation.generate_sigma_polynomials(sigma_maps, &domain);
 
         let rolling_product_poly = permutation.get_rolling_product(gamma, beta, &domain);
         let z_evals = crate::fft::fft(&rolling_product_poly.coeffs, domain[1]);
