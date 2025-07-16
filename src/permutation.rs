@@ -10,8 +10,8 @@ use itertools::izip;
 pub struct Permutation<F: Field> {
     pub witness: Witness<F>,
     pub wiring: Vec<Vec<usize>>,
-    k1: F,
-    k2: F,
+    pub k1: F,
+    pub k2: F,
 }
 
 impl<F: Field> Permutation<F> {
@@ -51,7 +51,7 @@ impl<F: Field> Permutation<F> {
         (a_sigma, b_sigma, c_sigma)
     }
 
-    pub fn get_sigma_polynomials(
+    pub fn generate_sigma_polynomials(
         &self,
         mappings: (Vec<usize>, Vec<usize>, Vec<usize>),
         domain: &[F],
@@ -116,7 +116,7 @@ impl<F: Field> Permutation<F> {
     // convenience function producing rolling product
     pub fn get_rolling_product(&self, gamma: F, beta: F, domain: &[F]) -> DensePolynomial<F> {
         let sigma_maps = self.get_sigma_maps();
-        let sigma_polys = self.get_sigma_polynomials(sigma_maps.clone(), domain);
+        let sigma_polys = self.generate_sigma_polynomials(sigma_maps.clone(), domain);
         self.calculate_rolling_product(sigma_polys, &domain, gamma, beta)
     }
 }
@@ -273,7 +273,8 @@ mod tests {
             k2: fr(3),
         };
 
-        let (a_sigma, b_sigma, c_sigma) = perm.get_sigma_polynomials(mappings.clone(), &domain);
+        let (a_sigma, b_sigma, c_sigma) =
+            perm.generate_sigma_polynomials(mappings.clone(), &domain);
 
         let eval_a = fft(&a_sigma, domain[1]);
         let eval_b = fft(&b_sigma, domain[1]);
@@ -318,7 +319,7 @@ mod tests {
         // Identity sigma maps
         let sigma_maps = perm.get_sigma_maps();
 
-        let sigma_polys = perm.get_sigma_polynomials(sigma_maps.clone(), &domain);
+        let sigma_polys = perm.generate_sigma_polynomials(sigma_maps.clone(), &domain);
 
         let gamma = fr(13);
         let beta = fr(17);
@@ -372,7 +373,7 @@ mod tests {
         let gamma = fr(9);
         let beta = fr(6);
 
-        let sigma_polys = perm.get_sigma_polynomials(sigma_maps.clone(), &domain);
+        let sigma_polys = perm.generate_sigma_polynomials(sigma_maps.clone(), &domain);
         let z_poly = perm.calculate_rolling_product(sigma_polys, &domain, gamma, beta);
 
         // Z evals
@@ -414,7 +415,7 @@ mod tests {
         let beta = fr(6);
         let gamma = fr(9);
 
-        let sigma_polys = perm.get_sigma_polynomials(sigma_maps.clone(), &domain);
+        let sigma_polys = perm.generate_sigma_polynomials(sigma_maps.clone(), &domain);
         let mut z_poly = perm.calculate_rolling_product(sigma_polys, &domain, gamma, beta);
 
         // Tamper Z polynomial
