@@ -117,7 +117,10 @@ impl<F: Field> Circuit<F> {
         let b = fft(b, omega);
         let c = fft(c, omega);
 
-        let pi = fft(&pad_with_zeroes(public_input_polynomial, self.domain.len()), omega);
+        let pi = fft(
+            &pad_with_zeroes(public_input_polynomial, self.domain.len()),
+            omega,
+        );
 
         let mut constraint_poly = Vec::with_capacity(a.len());
         for i in 0..a.len() {
@@ -132,7 +135,7 @@ impl<F: Field> Circuit<F> {
         constraint_poly.iter().all(|x| x.is_zero())
     }
 
-    fn get_gate_constraint_polynomial(
+    pub fn generate_gate_constraint_polynomial(
         &self,
         selector: &SelectorPolynomials<F>,
         witness: &WitnessPolynomials<F>,
@@ -164,6 +167,14 @@ impl<F: Field> Circuit<F> {
         p_poly = vec_to_poly((p_poly + public_input).coeffs);
 
         p_poly
+    }
+
+    pub fn get_gate_constraint_polynomial(&self) -> DensePolynomial<F> {
+        self.generate_gate_constraint_polynomial(
+            &self.get_selector_polynomials(),
+            &self.get_witness_polynomials(),
+            self.compute_public_input_polynomial(),
+        )
     }
 
     pub fn vanishing_poly(domain: &[F]) -> DensePolynomial<F> {
@@ -247,7 +258,7 @@ mod tests {
         assert!(circuit.is_gate_constraint_polynomial_zero_over_h(&selector, &witness, &pi_poly));
 
         // 2. Extract P(x)
-        let gate_poly = circuit.get_gate_constraint_polynomial(&selector, &witness, pi_poly);
+        let gate_poly = circuit.generate_gate_constraint_polynomial(&selector, &witness, pi_poly);
         assert!(gate_poly.coeffs.iter().filter(|&x| !x.is_zero()).count() > 0);
 
         // 3. P(x) should be divisible by Z_H(x)
@@ -304,7 +315,7 @@ mod tests {
         assert!(circuit.is_gate_constraint_polynomial_zero_over_h(&selector, &witness, &pi_poly));
 
         // Checking if P(x) = 0 mod Zh(x)
-        let gate_poly = circuit.get_gate_constraint_polynomial(&selector, &witness, pi_poly);
+        let gate_poly = circuit.generate_gate_constraint_polynomial(&selector, &witness, pi_poly);
         assert!(gate_poly.coeffs.iter().filter(|&x1| !x1.is_zero()).count() > 0);
 
         let zh = Circuit::vanishing_poly(&domain);
@@ -327,18 +338,18 @@ mod tests {
         let omega = Fr::get_root_of_unity(n as u64).unwrap();
         let domain: Vec<Fr> = (0..n).map(|i| omega.pow(&[i as u64])).collect();
 
-        let gate0 = Gate::new(fr(1), fr(0), fr(0), fr(0), fr(0));         // a = x₀
-        let gate1 = Gate::new(fr(1), fr(0), fr(0), fr(0), fr(0));         // a = x₁
-        let gate2 = Gate::new(fr(1), fr(1), fr(1), -fr(1), fr(0));        // a + b + ab = c
-        let gate3 = Gate::new(fr(0), fr(0), fr(0), fr(0), fr(0));         // padding (optional)
+        let gate0 = Gate::new(fr(1), fr(0), fr(0), fr(0), fr(0)); // a = x₀
+        let gate1 = Gate::new(fr(1), fr(0), fr(0), fr(0), fr(0)); // a = x₁
+        let gate2 = Gate::new(fr(1), fr(1), fr(1), -fr(1), fr(0)); // a + b + ab = c
+        let gate3 = Gate::new(fr(0), fr(0), fr(0), fr(0), fr(0)); // padding (optional)
 
         let gates = vec![gate0, gate1, gate2, gate3];
 
         // Witness
         let witness = Witness {
-            a: vec![fr(3), fr(4), fr(3), fr(0)],         // a[0]=x₀, a[1]=x₁, a[2]=x₀ for gate2
-            b: vec![fr(0), fr(0), fr(4), fr(0)],         // b[2]=x₁ for gate2
-            c: vec![fr(0), fr(0), fr(19), fr(0)],        // c[2] = 3 + 4 + 3*4 = 19
+            a: vec![fr(3), fr(4), fr(3), fr(0)], // a[0]=x₀, a[1]=x₁, a[2]=x₀ for gate2
+            b: vec![fr(0), fr(0), fr(4), fr(0)], // b[2]=x₁ for gate2
+            c: vec![fr(0), fr(0), fr(19), fr(0)], // c[2] = 3 + 4 + 3*4 = 19
         };
 
         let public_inputs = vec![fr(3), fr(4)];
@@ -360,15 +371,17 @@ mod tests {
         // Check constraints
         assert!(circuit.is_gate_constraint_polynomial_zero_over_h(&selector, &witness, &pi_poly));
 
-        let gate_poly = circuit.get_gate_constraint_polynomial(&selector, &witness, pi_poly);
+        let gate_poly = circuit.generate_gate_constraint_polynomial(&selector, &witness, pi_poly);
         let zh = Circuit::vanishing_poly(&domain);
         let gate_dsp = DenseOrSparsePolynomial::from(gate_poly.clone());
         let zh_dsp = DenseOrSparsePolynomial::from(zh);
         let (_, remainder) = gate_dsp.divide_with_q_and_r(&zh_dsp).unwrap();
         assert!(remainder.is_zero());
 
-        let evaluations = domain.iter().map(|x| gate_poly.evaluate(x)).collect::<Vec<_>>();
+        let evaluations = domain
+            .iter()
+            .map(|x| gate_poly.evaluate(x))
+            .collect::<Vec<_>>();
         assert!(evaluations.iter().all(|x| x.is_zero()));
     }
-
 }
