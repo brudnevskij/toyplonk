@@ -449,4 +449,39 @@ mod tests {
             assert_eq!(expected[i + 1], actual, "Mismatch at i = {}", i);
         }
     }
+
+    #[test]
+    fn test_split_and_reconstruct_quotient_poly() {
+        use ark_std::UniformRand;
+
+        let mut rng = test_rng();
+        let n = 8;
+
+        // Construct t(X) with deg < 3n
+        let t_coeffs: Vec<Fr> = (0..(3 * n - 1)).map(|_| Fr::rand(&mut rng)).collect();
+        let t = DensePolynomial::from_coefficients_vec(t_coeffs.clone());
+
+        let b10 = Fr::rand(&mut rng);
+        let b11 = Fr::rand(&mut rng);
+
+        let (t_lo, t_mid, t_hi) =
+            KZGProver::<Bls12_381>::split_quotient_polynomial(&t, b10, b11, n);
+
+        // Reconstruct t(X) = t_lo(X) + X^n * t_mid(X) + X^{2n} * t_hi(X)
+        let mut xn = vec![Fr::zero(); n];
+        xn.push(Fr::one());
+        let xn_poly = DensePolynomial::from_coefficients_vec(xn.clone());
+
+        let mut x2n = vec![Fr::zero(); 2 * n];
+        x2n.push(Fr::one());
+        let x2n_poly = DensePolynomial::from_coefficients_vec(x2n);
+
+        let t_reconstructed = &t_lo + &(xn_poly.mul(&t_mid)) + (x2n_poly.mul(&t_hi));
+
+        assert_eq!(
+            t, t_reconstructed,
+            "Reconstructed t(X) does not match original"
+        );
+    }
+
 }
