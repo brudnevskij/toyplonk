@@ -359,10 +359,7 @@ mod tests {
             witness,
             public_inputs,
             domain.clone(),
-            vec![
-                vec![1, 6],
-                vec![0, 2]
-            ],
+            vec![vec![1, 6], vec![0, 2]],
             fr(3),
             fr(5),
         );
