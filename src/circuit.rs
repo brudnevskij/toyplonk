@@ -17,11 +17,11 @@ pub struct Circuit<F: Field> {
 
 #[derive(Clone, Debug)]
 pub struct SelectorPolynomials<F: Field> {
-    pub q_l: Vec<F>,
-    pub q_r: Vec<F>,
-    pub q_m: Vec<F>,
-    pub q_o: Vec<F>,
-    pub q_c: Vec<F>,
+    pub q_l: DensePolynomial<F>,
+    pub q_r: DensePolynomial<F>,
+    pub q_m: DensePolynomial<F>,
+    pub q_o: DensePolynomial<F>,
+    pub q_c: DensePolynomial<F>,
 }
 
 #[derive(Clone, Debug)]
@@ -70,11 +70,11 @@ impl<F: Field> Circuit<F> {
         }
 
         SelectorPolynomials {
-            q_l: inverse_fft(&q_l, omega),
-            q_r: inverse_fft(&q_r, omega),
-            q_m: inverse_fft(&q_m, omega),
-            q_o: inverse_fft(&q_o, omega),
-            q_c: inverse_fft(&q_c, omega),
+            q_l: vec_to_poly(inverse_fft(&q_l, omega)),
+            q_r: vec_to_poly(inverse_fft(&q_r, omega)),
+            q_m: vec_to_poly(inverse_fft(&q_m, omega)),
+            q_o: vec_to_poly(inverse_fft(&q_o, omega)),
+            q_c: vec_to_poly(inverse_fft(&q_c, omega)),
         }
     }
 
@@ -107,11 +107,11 @@ impl<F: Field> Circuit<F> {
         let WitnessPolynomials { a, b, c } = witness;
 
         // getting polynomials in evaluation form
-        let q_l = fft(q_l, omega);
-        let q_r = fft(q_r, omega);
-        let q_m = fft(q_m, omega);
-        let q_o = fft(q_o, omega);
-        let q_c = fft(q_c, omega);
+        let q_l = fft(&pad_with_zeroes(&q_l, self.domain.len()), omega);
+        let q_r = fft(&pad_with_zeroes(&q_r, self.domain.len()), omega);
+        let q_m = fft(&pad_with_zeroes(&q_m, self.domain.len()), omega);
+        let q_o = fft(&pad_with_zeroes(&q_o, self.domain.len()), omega);
+        let q_c = fft(&pad_with_zeroes(&q_c, self.domain.len()), omega);
 
         let a = fft(a, omega);
         let b = fft(b, omega);
@@ -142,31 +142,19 @@ impl<F: Field> Circuit<F> {
         public_input: DensePolynomial<F>,
     ) -> DensePolynomial<F> {
         let WitnessPolynomials { a, b, c } = witness;
-        let q_l_poly = vec_to_poly(selector.q_l.clone());
-        let q_r_poly = vec_to_poly(selector.q_r.clone());
-        let q_m_poly = vec_to_poly(selector.q_m.clone());
-        let q_o_poly = vec_to_poly(selector.q_o.clone());
-        let q_c_poly = vec_to_poly(selector.q_c.clone());
+       let SelectorPolynomials{ q_l, q_r, q_m, q_o, q_c } = selector;
 
         // Build each term safely
-        let term_l = vec_to_poly(q_l_poly.naive_mul(&a).coeffs);
-        let term_r = vec_to_poly(q_r_poly.naive_mul(&b).coeffs);
+        let term_l = vec_to_poly(q_l.naive_mul(&a).coeffs);
+        let term_r = vec_to_poly(q_r.naive_mul(&b).coeffs);
         let term_m = vec_to_poly(
-            q_m_poly
+            q_m
                 .naive_mul(&vec_to_poly(a.naive_mul(&b).coeffs))
                 .coeffs,
         );
-        let term_o = vec_to_poly(q_o_poly.naive_mul(&c).coeffs);
+        let term_o = vec_to_poly(q_o.naive_mul(&c).coeffs);
 
-        // Add terms up
-        let mut p_poly = term_l;
-        p_poly = vec_to_poly((p_poly + term_r).coeffs);
-        p_poly = vec_to_poly((p_poly + term_m).coeffs);
-        p_poly = vec_to_poly((p_poly + term_o).coeffs);
-        p_poly = vec_to_poly((p_poly + q_c_poly).coeffs);
-        p_poly = vec_to_poly((p_poly + public_input).coeffs);
-
-        p_poly
+        term_l + term_r + term_m + term_o + q_c.clone() + public_input
     }
 
     pub fn get_gate_constraint_polynomial(&self) -> DensePolynomial<F> {
@@ -203,9 +191,9 @@ mod tests {
     use crate::gate::Gate;
     use crate::witness::Witness;
     use ark_bls12_381::Fr;
-    use ark_ff::{FftField, Field, One, Zero};
-    use ark_poly::univariate::{DenseOrSparsePolynomial, DensePolynomial};
-    use ark_poly::{DenseUVPolynomial, EvaluationDomain, Polynomial};
+    use ark_ff::{FftField, Field, Zero};
+    use ark_poly::univariate::{DenseOrSparsePolynomial};
+    use ark_poly::{EvaluationDomain, Polynomial};
 
     // helper functions
     fn get_omega(n: usize) -> Fr {
