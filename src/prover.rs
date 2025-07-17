@@ -12,7 +12,7 @@ pub struct KZGProver<E: Pairing> {
     crs: Vec<E::G1Affine>,
     domain: Vec<E::ScalarField>,
     g1: E::G1Affine,
-    g2: E::G1Affine,
+    g2: E::G2Affine,
 }
 
 impl<E: Pairing> KZGProver<E> {
@@ -86,8 +86,18 @@ impl<E: Pairing> KZGProver<E> {
             r
         );
 
-        let permutation_summand_1 = self.compute_first_permutation_summand(
-            witness_polynomial.clone(),
+        // second summand, permutation 2
+        let sigma_maps = circuit.permutation.get_sigma_maps();
+        let sigma_polynomials = circuit
+            .permutation
+            .generate_sigma_polynomials(sigma_maps, &self.domain);
+
+        let lagrange_base_1 = compute_lagrange_base(1, &self.domain);
+        let last_summand = self.compute_last_summand(alpha, &vanishing_poly, &z, &lagrange_base_1);
+
+        let permutation_summand = self.compute_permutation_summand(
+            witness_polynomial,
+            sigma_polynomials,
             beta,
             gamma,
             circuit.permutation.k1,
@@ -97,28 +107,7 @@ impl<E: Pairing> KZGProver<E> {
             alpha,
         );
 
-        // second summand, permutation 2
-        let sigma_maps = circuit.permutation.get_sigma_maps();
-        let sigma_polynomials = circuit
-            .permutation
-            .generate_sigma_polynomials(sigma_maps, &self.domain);
-        let permutation_summand_2 = self.compute_second_permutation_summand(
-            witness_polynomial.clone(),
-            sigma_polynomials,
-            beta,
-            gamma,
-            &z,
-            &vanishing_poly,
-            alpha,
-        );
-
-        let lagrange_base_1 = compute_lagrange_base(1, &self.domain);
-        let last_summand = self.compute_last_summand(alpha, &vanishing_poly, &z, &lagrange_base_1);
-
-        let quotient_polynomial = first_summand
-            .add(permutation_summand_1)
-            .sub(&permutation_summand_2)
-            + last_summand;
+        let quotient_polynomial = first_summand + permutation_summand + last_summand;
 
         let (t_lo, t_mid, t_hi) = Self::split_quotient_polynomial(
             &quotient_polynomial,
@@ -132,9 +121,14 @@ impl<E: Pairing> KZGProver<E> {
         let t_hi_commitment = Self::commit_polynomial(&t_hi, &self.crs, self.g1);
     }
 
-    fn compute_first_permutation_summand(
+    fn compute_permutation_summand(
         &self,
         witness_polynomials: WitnessPolynomials<E::ScalarField>,
+        sigma_polynomials: (
+            DensePolynomial<E::ScalarField>,
+            DensePolynomial<E::ScalarField>,
+            DensePolynomial<E::ScalarField>,
+        ),
         beta: E::ScalarField,
         gamma: E::ScalarField,
         k1: E::ScalarField,
@@ -143,27 +137,55 @@ impl<E: Pairing> KZGProver<E> {
         vanishing_poly: &DensePolynomial<E::ScalarField>,
         alpha: E::ScalarField,
     ) -> DensePolynomial<E::ScalarField> {
+        let permutation_summand_1 = self.compute_first_permutation_summand(
+            witness_polynomials.clone(),
+            beta,
+            gamma,
+            k1,
+            k2,
+            &z,
+        );
+
+        let permutation_summand_2 = self.compute_second_permutation_summand(
+            witness_polynomials.clone(),
+            sigma_polynomials,
+            beta,
+            gamma,
+            &z,
+        );
+
+        let permutation_summand = permutation_summand_1.sub(&permutation_summand_2).mul(alpha);
+
+        let (permutation_summand, r) = DenseOrSparsePolynomial::from(permutation_summand)
+            .divide_with_q_and_r(&vanishing_poly.into())
+            .unwrap();
+        assert!(
+            r.is_zero(),
+            "permutation summand remainder is nonzero: {:?}",
+            r
+        );
+
+        permutation_summand
+    }
+
+    fn compute_first_permutation_summand(
+        &self,
+        witness_polynomials: WitnessPolynomials<E::ScalarField>,
+        beta: E::ScalarField,
+        gamma: E::ScalarField,
+        k1: E::ScalarField,
+        k2: E::ScalarField,
+        z: &DensePolynomial<E::ScalarField>,
+    ) -> DensePolynomial<E::ScalarField> {
         let WitnessPolynomials { a, b, c } = witness_polynomials;
         let a_multiply = vec_to_poly(vec![gamma, beta]) + a;
         let b_multiply = vec_to_poly(vec![gamma, beta * k1]) + b;
         let c_multiply = vec_to_poly(vec![gamma, beta * k2]) + c;
 
-        let permutation_portion = a_multiply
+        a_multiply
             .naive_mul(&b_multiply)
             .naive_mul(&c_multiply)
             .naive_mul(&z)
-            .mul(alpha);
-
-        let (permutation_summand, r) = DenseOrSparsePolynomial::from(permutation_portion)
-            .divide_with_q_and_r(&vanishing_poly.into())
-            .unwrap();
-        assert!(
-            r.is_zero(),
-            "permutation summand 1 remainder is nonzero: {:?}",
-            r
-        );
-
-        permutation_summand
     }
 
     fn compute_second_permutation_summand(
@@ -177,8 +199,6 @@ impl<E: Pairing> KZGProver<E> {
         beta: E::ScalarField,
         gamma: E::ScalarField,
         z: &DensePolynomial<E::ScalarField>,
-        vanishing_poly: &DensePolynomial<E::ScalarField>,
-        alpha: E::ScalarField,
     ) -> DensePolynomial<E::ScalarField> {
         let WitnessPolynomials { a, b, c } = witness_polynomials;
         let (sigma_1, sigma_2, sigma_3) = sigma_polynomials;
@@ -194,22 +214,10 @@ impl<E: Pairing> KZGProver<E> {
             shifted_z[i] *= omega.pow(&[i as u64]);
         }
 
-        let permutation_portion = a_multiply
+        a_multiply
             .naive_mul(&b_multiply)
             .naive_mul(&c_multiply)
             .naive_mul(&shifted_z)
-            .mul(alpha);
-
-        let (permutation_summand, r) = DenseOrSparsePolynomial::from(permutation_portion)
-            .divide_with_q_and_r(&vanishing_poly.into())
-            .unwrap();
-        assert!(
-            r.is_zero(),
-            "permutation summand 1 remainder is nonzero: {:?}",
-            r
-        );
-
-        permutation_summand
     }
 
     fn compute_last_summand(
@@ -313,9 +321,11 @@ impl<E: Pairing> KZGProver<E> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gate::Gate;
     use crate::permutation::Permutation;
     use crate::witness::Witness;
-    use ark_bls12_381::{Bls12_381, Fr, G1Projective};
+    use ark_bls12_381::{Bls12_381, Fr, G1Projective, G2Projective};
+    use ark_ec::Group;
     use ark_ff::{FftField, Field, One};
     use ark_poly::univariate::DensePolynomial;
     use ark_poly::{DenseUVPolynomial, Polynomial};
@@ -484,4 +494,131 @@ mod tests {
         );
     }
 
+    fn dummy_circuit() -> Circuit<Fr> {
+        let n = 4;
+        let omega = Fr::get_root_of_unity(n as u64).unwrap();
+        let domain: Vec<Fr> = (0..n).map(|i| omega.pow(&[i as u64])).collect();
+
+        let gate0 = Gate::new(fr(1), fr(0), fr(0), fr(0), fr(0)); // a = x₀
+        let gate1 = Gate::new(fr(1), fr(0), fr(0), fr(0), fr(0)); // a = x₁
+        let gate2 = Gate::new(fr(1), fr(1), fr(1), -fr(1), fr(0)); // a + b + ab = c
+        let gate3 = Gate::new(fr(0), fr(0), fr(0), fr(0), fr(0)); // padding (optional)
+
+        let gates = vec![gate0, gate1, gate2, gate3];
+
+        // Witness
+        let witness = Witness {
+            a: vec![fr(3), fr(4), fr(3), fr(0)], // a[0]=x₀, a[1]=x₁, a[2]=x₀ for gate2
+            b: vec![fr(0), fr(0), fr(4), fr(0)], // b[2]=x₁ for gate2
+            c: vec![fr(0), fr(0), fr(19), fr(0)], // c[2] = 3 + 4 + 3*4 = 19
+        };
+
+        let public_inputs = vec![fr(3), fr(4)];
+
+        Circuit::new(
+            gates,
+            witness,
+            public_inputs,
+            domain.clone(),
+            vec![vec![1, 6], vec![0, 2]],
+            fr(3),
+            fr(5),
+        )
+    }
+    #[test]
+    fn test_gate_constraint_summand_divides_zh() {
+        let circuit = dummy_circuit(); // Build a simple known-valid circuit
+        let zh = Circuit::vanishing_poly(&circuit.domain);
+
+        // get_gate_constraint_polynomial should be Q(X)
+        let q = circuit.get_gate_constraint_polynomial();
+
+        let zh_poly = DensePolynomial::from_coefficients_vec(zh.coeffs().to_vec());
+        let gcp = DenseOrSparsePolynomial::from(q.clone());
+
+        let (q_divided, r) = gcp.divide_with_q_and_r(&zh_poly.clone().into()).unwrap();
+        assert!(
+            r.is_zero(),
+            "Gate constraint polynomial does not divide Z_H(X)"
+        );
+
+        // Optional: recompute the remainder manually
+        let recomposed = q_divided.mul(&zh_poly);
+        assert_eq!(
+            recomposed, q,
+            "Gate constraint summand incorrect: Q(X) != q(X) * Z_H(X)"
+        );
+    }
+
+    #[test]
+    fn test_permutation_summand_correctness_against_raw_constraint() {
+        let circuit = dummy_circuit();
+        let zh = Circuit::vanishing_poly(&circuit.domain);
+        let witness_polys = circuit.get_witness_polynomials();
+
+        let (crs_g1, _) = dummy_crs::<Bls12_381>(circuit.domain.len() + 5);
+        let g1 = G1Projective::generator().into_affine();
+        let g2 = G2Projective::generator().into_affine();
+
+        let prover = KZGProver::<Bls12_381> {
+            crs: crs_g1,
+            domain: circuit.domain.clone(),
+            g1,
+            g2,
+        };
+
+        let mut rng = test_rng();
+        let beta = Fr::rand(&mut rng);
+        let gamma = Fr::rand(&mut rng);
+        let alpha = Fr::rand(&mut rng);
+
+        let z = circuit
+            .permutation
+            .get_rolling_product(gamma, beta, &circuit.domain);
+
+        let sigma_maps = circuit.permutation.get_sigma_maps();
+        let sigma_polys = circuit
+            .permutation
+            .generate_sigma_polynomials(sigma_maps, &circuit.domain);
+
+        // Compute raw LHS - RHS (not divided)
+        let lhs = prover.compute_first_permutation_summand(
+            witness_polys.clone(),
+            beta,
+            gamma,
+            circuit.permutation.k1,
+            circuit.permutation.k2,
+            &z,
+        );
+
+        let rhs = prover.compute_second_permutation_summand(
+            witness_polys.clone(),
+            sigma_polys.clone(),
+            beta,
+            gamma,
+            &z,
+        );
+
+        let raw_constraint = lhs.sub(&rhs).mul(alpha);
+
+        // Now compute your summand (already divided by Z_H)
+        let quotient_summand = prover.compute_permutation_summand(
+            witness_polys,
+            sigma_polys,
+            beta,
+            gamma,
+            circuit.permutation.k1,
+            circuit.permutation.k2,
+            &z,
+            &zh,
+            alpha,
+        );
+
+        let recomposed = quotient_summand.mul(&zh);
+
+        assert_eq!(
+            raw_constraint, recomposed,
+            "Computed quotient summand is incorrect: q_perm(X) * Z_H(X) != raw_constraint"
+        );
+    }
 }
