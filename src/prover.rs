@@ -93,7 +93,7 @@ impl<E: Pairing> KZGProver<E> {
             .generate_sigma_polynomials(sigma_maps, &self.domain);
 
         let lagrange_base_1 = compute_lagrange_base(1, &self.domain);
-        let last_summand = self.compute_last_summand(alpha, &vanishing_poly, &z, &lagrange_base_1);
+        let init_z_summand = self.compute_init_z_summand(alpha, &vanishing_poly, &z, &lagrange_base_1);
 
         let permutation_summand = self.compute_permutation_summand(
             witness_polynomial,
@@ -107,7 +107,7 @@ impl<E: Pairing> KZGProver<E> {
             alpha,
         );
 
-        let quotient_polynomial = first_summand + permutation_summand + last_summand;
+        let quotient_polynomial = first_summand + permutation_summand + init_z_summand;
 
         let (t_lo, t_mid, t_hi) = Self::split_quotient_polynomial(
             &quotient_polynomial,
@@ -220,7 +220,7 @@ impl<E: Pairing> KZGProver<E> {
             .naive_mul(&shifted_z)
     }
 
-    fn compute_last_summand(
+    fn compute_init_z_summand(
         &self,
         alpha: E::ScalarField,
         vanishing_polynomial: &DensePolynomial<E::ScalarField>,
@@ -619,6 +619,56 @@ mod tests {
         assert_eq!(
             raw_constraint, recomposed,
             "Computed quotient summand is incorrect: q_perm(X) * Z_H(X) != raw_constraint"
+        );
+    }
+
+    #[test]
+    fn test_init_z_summand_correctness_against_raw_constraint() {
+        let circuit = dummy_circuit();
+        let zh = Circuit::vanishing_poly(&circuit.domain);
+
+        let (crs_g1, _) = dummy_crs::<Bls12_381>(circuit.domain.len() + 5);
+        let g1 = G1Projective::generator().into_affine();
+        let g2 = G2Projective::generator().into_affine();
+
+        let prover = KZGProver::<Bls12_381> {
+            crs: crs_g1,
+            domain: circuit.domain.clone(),
+            g1,
+            g2,
+        };
+
+        let mut rng = test_rng();
+        let alpha = Fr::rand(&mut rng);
+        let beta = Fr::rand(&mut rng);
+        let gamma = Fr::rand(&mut rng);
+
+        let z = circuit
+            .permutation
+            .get_rolling_product(gamma, beta, &circuit.domain);
+
+        let lagrange_basis_1 = compute_lagrange_base(1, &circuit.domain);
+
+        // raw form: α² · L₁(X) · (Z(X) - 1)
+        let one = vec_to_poly(vec![Fr::one()]);
+        let raw_constraint = lagrange_basis_1
+            .clone()
+            .naive_mul(&z.clone().sub(&one))
+            .mul(&vec_to_poly(vec![alpha.pow([2])]));
+
+        // already-divided form
+        let quotient_summand = prover.compute_init_z_summand(
+            alpha,
+            &zh,
+            &z,
+            &lagrange_basis_1,
+        );
+
+        let recomposed = quotient_summand.mul(&zh);
+
+        assert_eq!(
+            raw_constraint, recomposed,
+            "Last quotient summand incorrect: q_last(X) * Z_H(X) != α² · L₁(X) · (Z(X) - 1)"
         );
     }
 }
