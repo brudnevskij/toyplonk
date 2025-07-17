@@ -1,11 +1,11 @@
 use crate::circuit::{Circuit, WitnessPolynomials};
 use crate::fft::{compute_lagrange_base, vec_to_poly};
-use crate::witness;
+use crate::transccript::hash_to_field;
 use ark_ec::pairing::Pairing;
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::{Field, One, Zero};
-use ark_poly::DenseUVPolynomial;
 use ark_poly::univariate::{DenseOrSparsePolynomial, DensePolynomial};
+use ark_poly::{DenseUVPolynomial, Polynomial};
 use std::ops::{Add, Mul, Sub};
 
 pub struct KZGProver<E: Pairing> {
@@ -20,14 +20,12 @@ impl<E: Pairing> KZGProver<E> {
         &self,
         circuit: Circuit<E::ScalarField>,
         blinding_scalars: &[E::ScalarField],
-        beta: E::ScalarField,
-        gamma: E::ScalarField,
-        alpha: E::ScalarField,
     ) {
         let n = circuit.gates.len();
         assert_eq!(blinding_scalars.len(), 11);
         assert_eq!(self.crs.len(), n + 5);
 
+        let mut commitment_buffer = Vec::new();
         let vanishing_poly = Circuit::vanishing_poly(&self.domain);
         let witness_polynomial = circuit.get_witness_polynomials();
         let a = witness_polynomial.a.clone();
@@ -42,6 +40,7 @@ impl<E: Pairing> KZGProver<E> {
             &vanishing_poly,
         );
         let a_commitment = Self::commit_polynomial(&a_poly, &self.crs, self.g1);
+        commitment_buffer.push(a_commitment);
 
         let b_poly = Self::compute_wire_coefficients_form(
             blinding_scalars[2],
@@ -50,6 +49,7 @@ impl<E: Pairing> KZGProver<E> {
             &vanishing_poly,
         );
         let b_commitment = Self::commit_polynomial(&b_poly, &self.crs, self.g1);
+        commitment_buffer.push(b_commitment);
 
         let c_poly = Self::compute_wire_coefficients_form(
             blinding_scalars[4],
@@ -58,8 +58,11 @@ impl<E: Pairing> KZGProver<E> {
             &vanishing_poly,
         );
         let c_commitment = Self::commit_polynomial(&c_poly, &self.crs, self.g1);
+        commitment_buffer.push(c_commitment);
 
         // round two, computing permutation poly
+        let beta = hash_to_field("beta", &commitment_buffer);
+        let gamma = hash_to_field("gamma", &commitment_buffer);
         let rolling_product = circuit
             .permutation
             .get_rolling_product(gamma, beta, &self.domain);
@@ -72,14 +75,13 @@ impl<E: Pairing> KZGProver<E> {
         );
 
         let z_commitment = Self::commit_polynomial(&z, &self.crs, self.g1);
+        commitment_buffer.push(z_commitment);
 
         // round three, computing quotient polynomial
         // first summand
-
         let gcp = DenseOrSparsePolynomial::from(circuit.get_gate_constraint_polynomial());
         let zh = DenseOrSparsePolynomial::from(vanishing_poly.clone());
         let (first_summand, r) = gcp.divide_with_q_and_r(&zh).unwrap();
-
         assert!(
             r.is_zero(),
             "gate constraint has non zero remainder: {:?}",
@@ -87,17 +89,19 @@ impl<E: Pairing> KZGProver<E> {
         );
 
         // second summand, permutation 2
+        let alpha = hash_to_field("alpha", &commitment_buffer);
         let sigma_maps = circuit.permutation.get_sigma_maps();
         let sigma_polynomials = circuit
             .permutation
             .generate_sigma_polynomials(sigma_maps, &self.domain);
 
         let lagrange_base_1 = compute_lagrange_base(1, &self.domain);
-        let init_z_summand = self.compute_init_z_summand(alpha, &vanishing_poly, &z, &lagrange_base_1);
+        let init_z_summand =
+            self.compute_init_z_summand(alpha, &vanishing_poly, &z, &lagrange_base_1);
 
         let permutation_summand = self.compute_permutation_summand(
             witness_polynomial,
-            sigma_polynomials,
+            &sigma_polynomials,
             beta,
             gamma,
             circuit.permutation.k1,
@@ -119,12 +123,27 @@ impl<E: Pairing> KZGProver<E> {
         let t_lo_commitment = Self::commit_polynomial(&t_lo, &self.crs, self.g1);
         let t_mid_commitment = Self::commit_polynomial(&t_mid, &self.crs, self.g1);
         let t_hi_commitment = Self::commit_polynomial(&t_hi, &self.crs, self.g1);
+        commitment_buffer.push(t_lo_commitment);
+        commitment_buffer.push(t_mid_commitment);
+        commitment_buffer.push(t_hi_commitment);
+
+        // round 4
+        let zeta = hash_to_field("zeta", &commitment_buffer);
+
+        let a_bar = a.evaluate(&zeta);
+        let b_bar = b.evaluate(&zeta);
+        let c_bar = c.evaluate(&zeta);
+
+        let sigma_bar_1 = sigma_polynomials.0.evaluate(&zeta);
+        let sigma_bar_2 = sigma_polynomials.1.evaluate(&zeta);
+
+        let z_omega_bar = z.evaluate(&zeta.mul(self.domain[1]));
     }
 
     fn compute_permutation_summand(
         &self,
         witness_polynomials: WitnessPolynomials<E::ScalarField>,
-        sigma_polynomials: (
+        sigma_polynomials: &(
             DensePolynomial<E::ScalarField>,
             DensePolynomial<E::ScalarField>,
             DensePolynomial<E::ScalarField>,
@@ -148,7 +167,7 @@ impl<E: Pairing> KZGProver<E> {
 
         let permutation_summand_2 = self.compute_second_permutation_summand(
             witness_polynomials.clone(),
-            sigma_polynomials,
+            &sigma_polynomials,
             beta,
             gamma,
             &z,
@@ -191,7 +210,7 @@ impl<E: Pairing> KZGProver<E> {
     fn compute_second_permutation_summand(
         &self,
         witness_polynomials: WitnessPolynomials<E::ScalarField>,
-        sigma_polynomials: (
+        sigma_polynomials: &(
             DensePolynomial<E::ScalarField>,
             DensePolynomial<E::ScalarField>,
             DensePolynomial<E::ScalarField>,
@@ -593,7 +612,7 @@ mod tests {
 
         let rhs = prover.compute_second_permutation_summand(
             witness_polys.clone(),
-            sigma_polys.clone(),
+            &sigma_polys.clone(),
             beta,
             gamma,
             &z,
@@ -604,7 +623,7 @@ mod tests {
         // Now compute your summand (already divided by Z_H)
         let quotient_summand = prover.compute_permutation_summand(
             witness_polys,
-            sigma_polys,
+            &sigma_polys,
             beta,
             gamma,
             circuit.permutation.k1,
@@ -657,12 +676,7 @@ mod tests {
             .mul(&vec_to_poly(vec![alpha.pow([2])]));
 
         // already-divided form
-        let quotient_summand = prover.compute_init_z_summand(
-            alpha,
-            &zh,
-            &z,
-            &lagrange_basis_1,
-        );
+        let quotient_summand = prover.compute_init_z_summand(alpha, &zh, &z, &lagrange_basis_1);
 
         let recomposed = quotient_summand.mul(&zh);
 
