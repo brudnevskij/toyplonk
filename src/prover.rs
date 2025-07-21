@@ -18,7 +18,7 @@ pub struct KZGProver<E: Pairing> {
 pub struct Proof<E: Pairing> {
     pub a: E::G1Affine,
     pub b: E::G1Affine,
-    pub c: E::G1Affine, 
+    pub c: E::G1Affine,
     pub z: E::G1Affine,
     pub t_lo: E::G1Affine,
     pub t_mid: E::G1Affine,
@@ -161,7 +161,7 @@ impl<E: Pairing> KZGProver<E> {
         // previous round's output could be added to transcript
         // however, I will just add v for now.
         let v = hash_to_field("v", &commitment_buffer);
-        
+
         let linearisation_polynomial = self.compute_linearisation_polynomial(
             a_bar,
             b_bar,
@@ -185,7 +185,7 @@ impl<E: Pairing> KZGProver<E> {
             &t_mid,
             &t_hi,
         );
-        
+
         let w_zeta = self.compute_opening_proof_polynomial(
             v,
             zeta,
@@ -201,17 +201,18 @@ impl<E: Pairing> KZGProver<E> {
             &sigma_polynomials.0,
             &sigma_polynomials.1,
         );
-        
+
         let w_zeta_commitment = Self::commit_polynomial(&w_zeta, &self.crs, self.g1);
         commitment_buffer.push(w_zeta_commitment);
 
-        let w_zeta_omega = self.compute_opening_proof_polynomial_omega(self.domain[1], zeta,z_omega_bar, &z);
-        
+        let w_zeta_omega =
+            self.compute_opening_proof_polynomial_omega(self.domain[1], zeta, z_omega_bar, &z);
+
         let w_zeta_omega_commitment = Self::commit_polynomial(&w_zeta_omega, &self.crs, self.g1);
         commitment_buffer.push(w_zeta_omega_commitment);
-        
-       // let u = hash_to_field("u", &commitment_buffer);
-        Proof{
+
+        // let u = hash_to_field("u", &commitment_buffer);
+        Proof {
             a: a_commitment,
             b: b_commitment,
             c: c_commitment,
@@ -1148,7 +1149,6 @@ mod tests {
         let actual = lin.evaluate(&zeta);
         assert_eq!(expected, actual);
     }
-
 
     #[test]
     fn test_opening_polynomial_evaluation_correctness() {
