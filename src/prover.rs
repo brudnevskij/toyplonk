@@ -874,4 +874,176 @@ mod tests {
             "Last quotient summand incorrect: q_last(X) * Z_H(X) != α² · L₁(X) · (Z(X) - 1)"
         );
     }
+
+    #[test]
+    fn test_constraint_linearisation_summand_correctness() {
+        let circuit = dummy_circuit();
+        let selector = circuit.get_selector_polynomials();
+        let pi = circuit.compute_public_input_polynomial();
+        let zeta = circuit.domain[2];
+
+        let witness_polys = circuit.get_witness_polynomials();
+        let a_bar = witness_polys.a.evaluate(&zeta);
+        let b_bar = witness_polys.b.evaluate(&zeta);
+        let c_bar = witness_polys.c.evaluate(&zeta);
+
+        let (crs_g1, _) = dummy_crs::<Bls12_381>(circuit.domain.len() + 5);
+        let g1 = G1Projective::generator().into_affine();
+        let g2 = G2Projective::generator().into_affine();
+
+        let prover = KZGProver::<Bls12_381>{
+            crs: crs_g1,
+            domain: circuit.domain.clone(),
+            g1,
+            g2,
+        };
+        let poly = prover.calculate_constraint_linearisation_summand(
+            a_bar,
+            b_bar,
+            c_bar,
+            &selector,
+            &pi,
+            zeta,
+        );
+        let eval = poly.evaluate(&zeta);
+
+        // Manual check
+        let expected = a_bar * selector.q_l.evaluate(&zeta)
+            + b_bar * selector.q_r.evaluate(&zeta)
+            + a_bar * b_bar * selector.q_m.evaluate(&zeta)
+            + c_bar * selector.q_o.evaluate(&zeta)
+            + selector.q_c.evaluate(&zeta)
+            + pi.evaluate(&zeta);
+
+        assert_eq!(eval, expected);
+    }
+
+    #[test]
+    fn test_quotient_linearisation_summand_evaluation_matches_expected() {
+        let circuit = dummy_circuit();
+        let zh = Circuit::vanishing_poly(&circuit.domain);
+        let zeta = circuit.domain[2];
+
+        let (crs_g1, _) = dummy_crs::<Bls12_381>(circuit.domain.len() + 5);
+        let g1 = G1Projective::generator().into_affine();
+        let g2 = G2Projective::generator().into_affine();
+
+        let prover = KZGProver::<Bls12_381>{
+            crs: crs_g1,
+            domain: circuit.domain.clone(),
+            g1,
+            g2,
+        };
+
+        // Use known t_lo, t_mid, t_hi
+        let t_lo = DensePolynomial::from_coefficients_vec(vec![fr(1); 4]);
+        let t_mid = DensePolynomial::from_coefficients_vec(vec![fr(2); 4]);
+        let t_hi = DensePolynomial::from_coefficients_vec(vec![fr(3); 4]);
+
+        let eval_t =
+            t_lo.evaluate(&zeta) + zeta.pow([4]) * t_mid.evaluate(&zeta) + zeta.pow([8]) * t_hi.evaluate(&zeta);
+        let zh_eval = zh.evaluate(&zeta);
+        let expected = eval_t * zh_eval;
+
+        let poly = prover.compute_quotient_linearization_summand(4, zeta, &zh, &t_lo, &t_mid, &t_hi);
+        let actual = poly.evaluate(&zeta);
+
+        assert_eq!(actual, expected, "quotient lin summand mismatch");
+    }
+
+    #[test]
+    fn test_init_z_linearisation_summand_matches_expected() {
+        let circuit = dummy_circuit();
+        let zeta = circuit.domain[1];
+        let lagrange_base = compute_lagrange_base(1, &circuit.domain);
+
+        let mut rng = test_rng();
+        let alpha = Fr::rand(&mut rng);
+        let z = circuit.permutation.get_rolling_product(Fr::rand(&mut rng), Fr::rand(&mut rng), &circuit.domain);
+
+        let (crs_g1, _) = dummy_crs::<Bls12_381>(circuit.domain.len() + 5);
+        let g1 = G1Projective::generator().into_affine();
+        let g2 = G2Projective::generator().into_affine();
+
+        let prover = KZGProver::<Bls12_381>{
+            crs: crs_g1,
+            domain: circuit.domain.clone(),
+            g1 ,
+            g2,
+        };
+
+        let lin = prover.compute_init_z_linearization_summand(alpha, zeta, &z, &lagrange_base);
+        let eval = lin.evaluate(&zeta);
+
+        let expected = (z.evaluate(&zeta) - fr(1)) * lagrange_base.evaluate(&zeta) * alpha.pow([2]);
+        assert_eq!(eval, expected);
+    }
+    #[test]
+    fn test_permutation_linearization_summand_correctness() {
+        let circuit = dummy_circuit();
+
+        let (crs_g1, _) = dummy_crs::<Bls12_381>(circuit.domain.len() + 5);
+        let g1 = G1Projective::generator().into_affine();
+        let g2 = G2Projective::generator().into_affine();
+
+        let prover = KZGProver::<Bls12_381>{
+            crs:crs_g1,
+            domain: circuit.domain.clone(),
+            g1,
+            g2
+        };
+        let witness = circuit.get_witness_polynomials();
+        let zeta = circuit.domain[1];
+        let zh = Circuit::vanishing_poly(&circuit.domain);
+
+        let mut rng = test_rng();
+        let alpha = Fr::rand(&mut rng);
+        let beta = Fr::rand(&mut rng);
+        let gamma = Fr::rand(&mut rng);
+
+        let z = circuit.permutation.get_rolling_product(gamma, beta, &circuit.domain);
+        let sigma_maps = circuit.permutation.get_sigma_maps();
+        let sigma_polys = circuit
+            .permutation
+            .generate_sigma_polynomials(sigma_maps, &circuit.domain);
+
+        let a_bar = witness.a.evaluate(&zeta);
+        let b_bar = witness.b.evaluate(&zeta);
+        let c_bar = witness.c.evaluate(&zeta);
+        let sigma_bar_1 = sigma_polys.0.evaluate(&zeta);
+        let sigma_bar_2 = sigma_polys.1.evaluate(&zeta);
+        let z_omega_bar = z.evaluate(&(zeta * circuit.domain[1]));
+
+        let lin = prover.compute_permutation_linearization_summand(
+            a_bar,
+            b_bar,
+            c_bar,
+            sigma_bar_1,
+            sigma_bar_2,
+            z_omega_bar,
+            alpha,
+            beta,
+            gamma,
+            zeta,
+            circuit.permutation.k1,
+            circuit.permutation.k2,
+            &z,
+            &sigma_polys.2,
+        );
+
+        let lhs = z.evaluate(&zeta)
+            * (a_bar + beta * zeta + gamma)
+            * (b_bar + beta * circuit.permutation.k1 * zeta + gamma)
+            * (c_bar + beta * circuit.permutation.k2 * zeta + gamma);
+
+        let rhs = z_omega_bar
+            * (a_bar + beta * sigma_bar_1 + gamma)
+            * (b_bar + beta * sigma_bar_2 + gamma)
+            * (c_bar + beta * sigma_polys.2.evaluate(&zeta) + gamma);
+
+        let expected = (lhs - rhs) * alpha;
+        let actual = lin.evaluate(&zeta);
+        assert_eq!(expected, actual);
+    }
+    
 }
