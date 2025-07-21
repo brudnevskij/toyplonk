@@ -95,6 +95,11 @@ pub fn compute_lagrange_base<F: Field>(order: usize, domain: &[F]) -> DensePolyn
 
     vec_to_poly(inverse_fft(lagrange_evaluations.as_slice(), domain[1]))
 }
+
+pub fn constant_polynomial<F: Field>(constant: F) -> DensePolynomial<F> {
+    vec_to_poly(vec![constant])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

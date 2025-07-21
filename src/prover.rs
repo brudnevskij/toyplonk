@@ -1,12 +1,12 @@
 use crate::circuit::{Circuit, SelectorPolynomials, WitnessPolynomials};
-use crate::fft::{compute_lagrange_base, vec_to_poly};
+use crate::fft::{compute_lagrange_base, constant_polynomial, vec_to_poly};
 use crate::transccript::hash_to_field;
 use ark_ec::pairing::Pairing;
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::{Field, One, Zero};
 use ark_poly::univariate::{DenseOrSparsePolynomial, DensePolynomial};
 use ark_poly::{DenseUVPolynomial, Polynomial};
-use std::ops::{Add, Mul, Sub};
+use std::ops::{Add, Div, Mul, Sub};
 
 pub struct KZGProver<E: Pairing> {
     crs: Vec<E::G1Affine>,
@@ -15,12 +15,30 @@ pub struct KZGProver<E: Pairing> {
     g2: E::G2Affine,
 }
 
+pub struct Proof<E: Pairing> {
+    a: E::G1Affine,
+    b: E::G1Affine,
+    c: E::G1Affine, 
+    z: E::G1Affine,
+    t_lo: E::G1Affine,
+    t_mid: E::G1Affine,
+    t_hi: E::G1Affine,
+    w_zeta: E::G1Affine,
+    w_zeta_omega: E::G1Affine,
+    a_bar: E::ScalarField,
+    b_bar: E::ScalarField,
+    c_bar: E::ScalarField,
+    sigma_bar_1: E::ScalarField,
+    sigma_bar_2: E::ScalarField,
+    z_omega_bar: E::ScalarField,
+}
+
 impl<E: Pairing> KZGProver<E> {
     pub fn generate_proof(
         &self,
         circuit: Circuit<E::ScalarField>,
         blinding_scalars: &[E::ScalarField],
-    ) {
+    ) -> Proof<E> {
         let n = circuit.gates.len();
         assert_eq!(blinding_scalars.len(), 11);
         assert_eq!(self.crs.len(), n + 5);
@@ -142,7 +160,8 @@ impl<E: Pairing> KZGProver<E> {
         // round 5
         // previous round's output could be added to transcript
         // however, I will just add v for now.
-        // let v = hash_to_field("v", &commitment_buffer);
+        let v = hash_to_field("v", &commitment_buffer);
+        
         let linearisation_polynomial = self.compute_linearisation_polynomial(
             a_bar,
             b_bar,
@@ -166,6 +185,88 @@ impl<E: Pairing> KZGProver<E> {
             &t_mid,
             &t_hi,
         );
+        
+        let w_zeta = self.compute_opening_proof_polynomial(
+            v,
+            zeta,
+            a_bar,
+            b_bar,
+            c_bar,
+            sigma_bar_1,
+            sigma_bar_2,
+            &linearisation_polynomial,
+            &a,
+            &b,
+            &c,
+            &sigma_polynomials.0,
+            &sigma_polynomials.1,
+        );
+        
+        let w_zeta_commitment = Self::commit_polynomial(&w_zeta, &self.crs, self.g1);
+        commitment_buffer.push(w_zeta_commitment);
+
+        let w_zeta_omega = self.compute_opening_proof_polynomial_omega(self.domain[1], zeta,z_omega_bar, &z);
+        
+        let w_zeta_omega_commitment = Self::commit_polynomial(&w_zeta_omega, &self.crs, self.g1);
+        commitment_buffer.push(w_zeta_commitment);
+        
+       // let u = hash_to_field("u", &commitment_buffer);
+        Proof{
+            a: a_commitment,
+            b: b_commitment,
+            c: c_commitment,
+            z: z_commitment,
+            t_lo: t_lo_commitment,
+            t_mid: t_mid_commitment,
+            t_hi: t_hi_commitment,
+            w_zeta: w_zeta_commitment,
+            w_zeta_omega: w_zeta_omega_commitment,
+            a_bar,
+            b_bar,
+            c_bar,
+            sigma_bar_1,
+            sigma_bar_2,
+            z_omega_bar,
+        }
+    }
+
+    fn compute_opening_proof_polynomial(
+        &self,
+        v: E::ScalarField,
+        zeta: E::ScalarField,
+        a_bar: E::ScalarField,
+        b_bar: E::ScalarField,
+        c_bar: E::ScalarField,
+        sigma_bar_1: E::ScalarField,
+        sigma_bar_2: E::ScalarField,
+        r: &DensePolynomial<E::ScalarField>,
+        a: &DensePolynomial<E::ScalarField>,
+        b: &DensePolynomial<E::ScalarField>,
+        c: &DensePolynomial<E::ScalarField>,
+        sigma_1: &DensePolynomial<E::ScalarField>,
+        sigma_2: &DensePolynomial<E::ScalarField>,
+    ) -> DensePolynomial<E::ScalarField> {
+        let powers_of_v = (0..=5).map(|i| v.pow(&[i as u64])).collect::<Vec<_>>();
+
+        (r.clone()
+            + (a - &constant_polynomial(a_bar)).mul(powers_of_v[1])
+            + (b - &constant_polynomial(b_bar)).mul(powers_of_v[2])
+            + (c - &constant_polynomial(c_bar)).mul(powers_of_v[3])
+            + (sigma_1 - &constant_polynomial(sigma_bar_1)).mul(powers_of_v[4])
+            + (sigma_2 - &constant_polynomial(sigma_bar_2)).mul(powers_of_v[5]))
+        // (X-z)
+        .div(&vec_to_poly(vec![-zeta, E::ScalarField::one()]))
+    }
+
+    fn compute_opening_proof_polynomial_omega(
+        &self,
+        omega: E::ScalarField,
+        zeta: E::ScalarField,
+        z_omega_bar: E::ScalarField,
+        z: &DensePolynomial<E::ScalarField>,
+    ) -> DensePolynomial<E::ScalarField> {
+        (z - &constant_polynomial(z_omega_bar))
+            .div(&vec_to_poly(vec![-zeta * omega, E::ScalarField::one()]))
     }
 
     fn compute_linearisation_polynomial(
@@ -891,20 +992,14 @@ mod tests {
         let g1 = G1Projective::generator().into_affine();
         let g2 = G2Projective::generator().into_affine();
 
-        let prover = KZGProver::<Bls12_381>{
+        let prover = KZGProver::<Bls12_381> {
             crs: crs_g1,
             domain: circuit.domain.clone(),
             g1,
             g2,
         };
-        let poly = prover.calculate_constraint_linearisation_summand(
-            a_bar,
-            b_bar,
-            c_bar,
-            &selector,
-            &pi,
-            zeta,
-        );
+        let poly = prover
+            .calculate_constraint_linearisation_summand(a_bar, b_bar, c_bar, &selector, &pi, zeta);
         let eval = poly.evaluate(&zeta);
 
         // Manual check
@@ -928,7 +1023,7 @@ mod tests {
         let g1 = G1Projective::generator().into_affine();
         let g2 = G2Projective::generator().into_affine();
 
-        let prover = KZGProver::<Bls12_381>{
+        let prover = KZGProver::<Bls12_381> {
             crs: crs_g1,
             domain: circuit.domain.clone(),
             g1,
@@ -940,12 +1035,14 @@ mod tests {
         let t_mid = DensePolynomial::from_coefficients_vec(vec![fr(2); 4]);
         let t_hi = DensePolynomial::from_coefficients_vec(vec![fr(3); 4]);
 
-        let eval_t =
-            t_lo.evaluate(&zeta) + zeta.pow([4]) * t_mid.evaluate(&zeta) + zeta.pow([8]) * t_hi.evaluate(&zeta);
+        let eval_t = t_lo.evaluate(&zeta)
+            + zeta.pow([4]) * t_mid.evaluate(&zeta)
+            + zeta.pow([8]) * t_hi.evaluate(&zeta);
         let zh_eval = zh.evaluate(&zeta);
         let expected = eval_t * zh_eval;
 
-        let poly = prover.compute_quotient_linearization_summand(4, zeta, &zh, &t_lo, &t_mid, &t_hi);
+        let poly =
+            prover.compute_quotient_linearization_summand(4, zeta, &zh, &t_lo, &t_mid, &t_hi);
         let actual = poly.evaluate(&zeta);
 
         assert_eq!(actual, expected, "quotient lin summand mismatch");
@@ -959,16 +1056,20 @@ mod tests {
 
         let mut rng = test_rng();
         let alpha = Fr::rand(&mut rng);
-        let z = circuit.permutation.get_rolling_product(Fr::rand(&mut rng), Fr::rand(&mut rng), &circuit.domain);
+        let z = circuit.permutation.get_rolling_product(
+            Fr::rand(&mut rng),
+            Fr::rand(&mut rng),
+            &circuit.domain,
+        );
 
         let (crs_g1, _) = dummy_crs::<Bls12_381>(circuit.domain.len() + 5);
         let g1 = G1Projective::generator().into_affine();
         let g2 = G2Projective::generator().into_affine();
 
-        let prover = KZGProver::<Bls12_381>{
+        let prover = KZGProver::<Bls12_381> {
             crs: crs_g1,
             domain: circuit.domain.clone(),
-            g1 ,
+            g1,
             g2,
         };
 
@@ -986,11 +1087,11 @@ mod tests {
         let g1 = G1Projective::generator().into_affine();
         let g2 = G2Projective::generator().into_affine();
 
-        let prover = KZGProver::<Bls12_381>{
-            crs:crs_g1,
+        let prover = KZGProver::<Bls12_381> {
+            crs: crs_g1,
             domain: circuit.domain.clone(),
             g1,
-            g2
+            g2,
         };
         let witness = circuit.get_witness_polynomials();
         let zeta = circuit.domain[1];
@@ -1001,7 +1102,9 @@ mod tests {
         let beta = Fr::rand(&mut rng);
         let gamma = Fr::rand(&mut rng);
 
-        let z = circuit.permutation.get_rolling_product(gamma, beta, &circuit.domain);
+        let z = circuit
+            .permutation
+            .get_rolling_product(gamma, beta, &circuit.domain);
         let sigma_maps = circuit.permutation.get_sigma_maps();
         let sigma_polys = circuit
             .permutation
@@ -1045,5 +1148,4 @@ mod tests {
         let actual = lin.evaluate(&zeta);
         assert_eq!(expected, actual);
     }
-    
 }
