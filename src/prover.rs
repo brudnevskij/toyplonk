@@ -633,7 +633,7 @@ mod tests {
     use crate::gate::Gate;
     use crate::permutation::Permutation;
     use crate::witness::Witness;
-    use ark_bls12_381::{Bls12_381, Fr, G1Projective, G2Projective};
+    use ark_bls12_381::{Bls12_381, Fr, G1Affine, G1Projective, G2Projective};
     use ark_ec::Group;
     use ark_ff::{FftField, Field, One};
     use ark_poly::univariate::DensePolynomial;
@@ -1147,5 +1147,25 @@ mod tests {
         let expected = (lhs - rhs) * alpha;
         let actual = lin.evaluate(&zeta);
         assert_eq!(expected, actual);
+    }
+
+
+    #[test]
+    fn test_opening_polynomial_evaluation_correctness() {
+        let mut rng = test_rng();
+        let zeta = Fr::rand(&mut rng);
+        let x_poly = vec_to_poly(vec![-zeta, Fr::one()]); // (X - zeta)
+
+        let f = vec_to_poly((0..8).map(|_| Fr::rand(&mut rng)).collect());
+        let f_zeta = f.evaluate(&zeta);
+
+        let quotient = &f - &vec_to_poly(vec![f_zeta]);
+        let opening_poly = &quotient / &x_poly;
+
+        let recovered = &opening_poly * &x_poly + vec_to_poly(vec![f_zeta]);
+        for i in 0..10 {
+            let point = Fr::from(i as u64);
+            assert_eq!(f.evaluate(&point), recovered.evaluate(&point));
+        }
     }
 }
