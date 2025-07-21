@@ -16,21 +16,21 @@ pub struct KZGProver<E: Pairing> {
 }
 
 pub struct Proof<E: Pairing> {
-    a: E::G1Affine,
-    b: E::G1Affine,
-    c: E::G1Affine, 
-    z: E::G1Affine,
-    t_lo: E::G1Affine,
-    t_mid: E::G1Affine,
-    t_hi: E::G1Affine,
-    w_zeta: E::G1Affine,
-    w_zeta_omega: E::G1Affine,
-    a_bar: E::ScalarField,
-    b_bar: E::ScalarField,
-    c_bar: E::ScalarField,
-    sigma_bar_1: E::ScalarField,
-    sigma_bar_2: E::ScalarField,
-    z_omega_bar: E::ScalarField,
+    pub a: E::G1Affine,
+    pub b: E::G1Affine,
+    pub c: E::G1Affine, 
+    pub z: E::G1Affine,
+    pub t_lo: E::G1Affine,
+    pub t_mid: E::G1Affine,
+    pub t_hi: E::G1Affine,
+    pub w_zeta: E::G1Affine,
+    pub w_zeta_omega: E::G1Affine,
+    pub a_bar: E::ScalarField,
+    pub b_bar: E::ScalarField,
+    pub c_bar: E::ScalarField,
+    pub sigma_bar_1: E::ScalarField,
+    pub sigma_bar_2: E::ScalarField,
+    pub z_omega_bar: E::ScalarField,
 }
 
 impl<E: Pairing> KZGProver<E> {
@@ -208,7 +208,7 @@ impl<E: Pairing> KZGProver<E> {
         let w_zeta_omega = self.compute_opening_proof_polynomial_omega(self.domain[1], zeta,z_omega_bar, &z);
         
         let w_zeta_omega_commitment = Self::commit_polynomial(&w_zeta_omega, &self.crs, self.g1);
-        commitment_buffer.push(w_zeta_commitment);
+        commitment_buffer.push(w_zeta_omega_commitment);
         
        // let u = hash_to_field("u", &commitment_buffer);
         Proof{
