@@ -1,4 +1,4 @@
-use crate::circuit::{Circuit, WitnessPolynomials};
+use crate::circuit::{Circuit, SelectorPolynomials, WitnessPolynomials};
 use crate::fft::{compute_lagrange_base, vec_to_poly};
 use crate::transccript::hash_to_field;
 use ark_ec::pairing::Pairing;
@@ -138,6 +138,195 @@ impl<E: Pairing> KZGProver<E> {
         let sigma_bar_2 = sigma_polynomials.1.evaluate(&zeta);
 
         let z_omega_bar = z.evaluate(&zeta.mul(self.domain[1]));
+
+        // round 5
+        // previous round's output could be added to transcript
+        // however, I will just add v for now.
+        // let v = hash_to_field("v", &commitment_buffer);
+        let linearisation_polynomial = self.compute_linearisation_polynomial(
+            a_bar,
+            b_bar,
+            c_bar,
+            sigma_bar_1,
+            sigma_bar_2,
+            z_omega_bar,
+            alpha,
+            beta,
+            gamma,
+            zeta,
+            circuit.permutation.k1,
+            circuit.permutation.k2,
+            &circuit.get_selector_polynomials(),
+            &circuit.compute_public_input_polynomial(),
+            &z,
+            &sigma_polynomials.2,
+            &lagrange_base_1,
+            &vanishing_poly,
+            &t_lo,
+            &t_mid,
+            &t_hi,
+        );
+    }
+
+    fn compute_linearisation_polynomial(
+        &self,
+        a_bar: E::ScalarField,
+        b_bar: E::ScalarField,
+        c_bar: E::ScalarField,
+        sigma_bar_1: E::ScalarField,
+        sigma_bar_2: E::ScalarField,
+        z_omega_bar: E::ScalarField,
+        alpha: E::ScalarField,
+        beta: E::ScalarField,
+        gamma: E::ScalarField,
+        zeta: E::ScalarField,
+        k1: E::ScalarField,
+        k2: E::ScalarField,
+        selector_polynomials: &SelectorPolynomials<E::ScalarField>,
+        public_input_polynomial: &DensePolynomial<E::ScalarField>,
+        z: &DensePolynomial<E::ScalarField>,
+        sigma_3: &DensePolynomial<E::ScalarField>,
+        lagrange_base_1: &DensePolynomial<E::ScalarField>,
+        vanishing_polynomial: &DensePolynomial<E::ScalarField>,
+        t_lo: &DensePolynomial<E::ScalarField>,
+        t_mid: &DensePolynomial<E::ScalarField>,
+        t_hi: &DensePolynomial<E::ScalarField>,
+    ) -> DensePolynomial<E::ScalarField> {
+        let constraint_lin_summand = self.calculate_constraint_linearisation_summand(
+            a_bar,
+            b_bar,
+            c_bar,
+            selector_polynomials,
+            public_input_polynomial,
+            zeta,
+        );
+
+        let permutation_lin_summand = self.compute_permutation_linearization_summand(
+            a_bar,
+            b_bar,
+            c_bar,
+            sigma_bar_1,
+            sigma_bar_2,
+            z_omega_bar,
+            alpha,
+            beta,
+            gamma,
+            zeta,
+            k1,
+            k2,
+            z,
+            sigma_3,
+        );
+
+        let init_z_lin_summand =
+            self.compute_init_z_linearization_summand(alpha, zeta, z, lagrange_base_1);
+
+        let quotient_summand = self.compute_quotient_linearization_summand(
+            self.domain.len(),
+            zeta,
+            vanishing_polynomial,
+            t_lo,
+            t_mid,
+            t_hi,
+        );
+
+        constraint_lin_summand + permutation_lin_summand + init_z_lin_summand + quotient_summand
+    }
+
+    fn compute_quotient_linearization_summand(
+        &self,
+        n: usize,
+        zeta: E::ScalarField,
+        vanishing_polynomial: &DensePolynomial<E::ScalarField>,
+        t_lo: &DensePolynomial<E::ScalarField>,
+        t_mid: &DensePolynomial<E::ScalarField>,
+        t_hi: &DensePolynomial<E::ScalarField>,
+    ) -> DensePolynomial<E::ScalarField> {
+        let vanishing_evaluations = vanishing_polynomial.evaluate(&zeta);
+
+        let zeta_n = zeta.pow(&[n as u64]);
+        let zeta_2n = zeta_n.square();
+        let mut t_mid_shifted = vec![E::ScalarField::zero(); n];
+        let mut t_hi_shifted = vec![E::ScalarField::zero(); n * 2];
+        t_mid.iter().for_each(|&x| t_mid_shifted.push(x * zeta_n));
+        t_hi.iter().for_each(|&x| t_hi_shifted.push(x * zeta_2n));
+
+        (t_lo.clone() + vec_to_poly(t_mid_shifted) + vec_to_poly(t_hi_shifted))
+            .mul(vanishing_evaluations)
+    }
+    fn compute_init_z_linearization_summand(
+        &self,
+        alpha: E::ScalarField,
+        zeta: E::ScalarField,
+        z: &DensePolynomial<E::ScalarField>,
+        lagrange_base_1: &DensePolynomial<E::ScalarField>,
+    ) -> DensePolynomial<E::ScalarField> {
+        let lagrange_base_evaluation = lagrange_base_1.evaluate(&zeta);
+        // Z(x) - 1
+        z.sub(&vec_to_poly(vec![-E::ScalarField::one()]))
+            // (Z(x) - 1)L1(z)
+            .mul(lagrange_base_evaluation)
+            // a^2 *[(Z(x) - 1)L1(z)]
+            .mul(alpha.pow(&[2u64]))
+    }
+
+    fn compute_permutation_linearization_summand(
+        &self,
+        a_bar: E::ScalarField,
+        b_bar: E::ScalarField,
+        c_bar: E::ScalarField,
+        sigma_bar_1: E::ScalarField,
+        sigma_bar_2: E::ScalarField,
+        z_omega_bar: E::ScalarField,
+        alpha: E::ScalarField,
+        beta: E::ScalarField,
+        gamma: E::ScalarField,
+        zeta: E::ScalarField,
+        k1: E::ScalarField,
+        k2: E::ScalarField,
+        z: &DensePolynomial<E::ScalarField>,
+        sigma_3: &DensePolynomial<E::ScalarField>,
+    ) -> DensePolynomial<E::ScalarField> {
+        let permut_1 = (a_bar + beta * zeta + gamma)
+            * (b_bar + beta * k1 * zeta + gamma)
+            * (c_bar + beta * k2 * zeta + gamma);
+        let permut_summand_1 = z.mul(permut_1);
+
+        // (c(z) + beta * S(x) + gamma )
+        // because c_bar is constant I add it to gamma
+        let permut_2_c = sigma_3.mul(beta) + vec_to_poly(vec![c_bar + gamma]);
+        let permut_summand_2 = permut_2_c.mul(
+            (a_bar + beta * sigma_bar_1 + gamma)
+                * (b_bar + beta * sigma_bar_2 + gamma)
+                * z_omega_bar,
+        );
+
+        permut_summand_1.sub(&permut_summand_2).mul(alpha)
+    }
+
+    fn calculate_constraint_linearisation_summand(
+        &self,
+        a_bar: E::ScalarField,
+        b_bar: E::ScalarField,
+        c_bar: E::ScalarField,
+        selector_polynomials: &SelectorPolynomials<E::ScalarField>,
+        public_polynomial: &DensePolynomial<E::ScalarField>,
+        zeta: E::ScalarField,
+    ) -> DensePolynomial<E::ScalarField> {
+        let pi_eval = vec_to_poly(vec![public_polynomial.evaluate(&zeta)]);
+        let SelectorPolynomials {
+            q_l,
+            q_r,
+            q_m,
+            q_o,
+            q_c,
+        } = selector_polynomials;
+        let l_term = q_l.mul(a_bar);
+        let r_term = q_r.mul(b_bar);
+        let m_term = q_m.mul(a_bar * b_bar);
+        let o_term = q_o.mul(c_bar);
+
+        m_term + r_term + l_term + o_term + q_c.clone() + pi_eval
     }
 
     fn compute_permutation_summand(

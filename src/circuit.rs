@@ -142,16 +142,18 @@ impl<F: Field> Circuit<F> {
         public_input: DensePolynomial<F>,
     ) -> DensePolynomial<F> {
         let WitnessPolynomials { a, b, c } = witness;
-       let SelectorPolynomials{ q_l, q_r, q_m, q_o, q_c } = selector;
+        let SelectorPolynomials {
+            q_l,
+            q_r,
+            q_m,
+            q_o,
+            q_c,
+        } = selector;
 
         // Build each term safely
         let term_l = vec_to_poly(q_l.naive_mul(&a).coeffs);
         let term_r = vec_to_poly(q_r.naive_mul(&b).coeffs);
-        let term_m = vec_to_poly(
-            q_m
-                .naive_mul(&vec_to_poly(a.naive_mul(&b).coeffs))
-                .coeffs,
-        );
+        let term_m = vec_to_poly(q_m.naive_mul(&vec_to_poly(a.naive_mul(&b).coeffs)).coeffs);
         let term_o = vec_to_poly(q_o.naive_mul(&c).coeffs);
 
         term_l + term_r + term_m + term_o + q_c.clone() + public_input
@@ -175,7 +177,7 @@ impl<F: Field> Circuit<F> {
     }
 
     // Computes PI(x), pads evaluations with 0 for ifft
-    fn compute_public_input_polynomial(&self) -> DensePolynomial<F> {
+    pub fn compute_public_input_polynomial(&self) -> DensePolynomial<F> {
         let mut evaluations = vec![F::zero(); self.domain.len()];
         for (i, &x) in self.public_inputs.iter().enumerate() {
             evaluations[i] = -x;
@@ -192,7 +194,7 @@ mod tests {
     use crate::witness::Witness;
     use ark_bls12_381::Fr;
     use ark_ff::{FftField, Field, Zero};
-    use ark_poly::univariate::{DenseOrSparsePolynomial};
+    use ark_poly::univariate::DenseOrSparsePolynomial;
     use ark_poly::{EvaluationDomain, Polynomial};
 
     // helper functions
