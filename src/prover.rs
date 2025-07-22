@@ -606,11 +606,14 @@ impl<E: Pairing> KZGProver<E> {
         blinding_poly + witness.clone()
     }
 
-    fn commit_polynomial(
+    pub fn commit_polynomial(
         polynomial: &DensePolynomial<E::ScalarField>,
         crs: &[E::G1Affine],
         g1: E::G1Affine, // this is [1]_1
     ) -> E::G1Affine {
+        if polynomial.coeffs.len() < 1 {
+            return g1;
+        }
         let mut acc = g1.into_group() * polynomial.coeffs[0]; // constant term
 
         for (i, coeff) in polynomial.coeffs.iter().skip(1).enumerate() {
