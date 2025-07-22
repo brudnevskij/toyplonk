@@ -2,6 +2,7 @@ use crate::circuit::Circuit;
 use crate::fft::{inverse_fft, vec_to_poly};
 use crate::prover::Proof;
 use crate::transccript::hash_to_field;
+use ark_ec::AffineRepr;
 use ark_ec::pairing::Pairing;
 use ark_ff::{Field, One, Zero};
 use ark_poly::Polynomial;
@@ -63,6 +64,8 @@ pub fn verify_kzg_proof<E: Pairing>(
     preprocessed_input: &VerifierPreprocessedInput<E>,
     public_input: &[E::ScalarField],
     domain: &[E::ScalarField],
+    k1: E::ScalarField,
+    k2: E::ScalarField,
 ) -> bool {
     // 1 - 3, validation is mostly done by type system
 
@@ -99,10 +102,12 @@ pub fn verify_kzg_proof<E: Pairing>(
         proof.c_bar,
         proof.sigma_bar_1,
         proof.sigma_bar_2,
-        proof.z_omega_bar
+        proof.z_omega_bar,
     );
-    
+
     // 9. compute first part of batched PC
+    let d1 = compute_first_part_of_batched_poly(domain.len(), k1, k2, lagrange_poly_eval, vanishing_eval, proof, preprocessed_input);
+    
     true
 }
 
@@ -148,4 +153,73 @@ fn compute_r_constant_terms<E: Pairing>(
             * (b_bar + beta * sigma_bar_2 + gamma)
             * (c_bar + gamma)
             * z_omega_bar
+}
+
+fn compute_first_part_of_batched_poly<E: Pairing>(
+    n: usize,
+    k1: E::ScalarField,
+    k2: E::ScalarField,
+    lagrange_eval: E::ScalarField,
+    vanishing_polynomial_eval: E::ScalarField,
+    proof: &Proof<E>,
+    verifier_preprocessed_input: &VerifierPreprocessedInput<E>,
+) -> E::G1Affine {
+    let &Proof {
+        z,
+        t_lo,
+        t_mid,
+        t_hi,
+        a_bar,
+        b_bar,
+        c_bar,
+        sigma_bar_1,
+        sigma_bar_2,
+        z_omega_bar,
+        ..
+    } = proof;
+    let &VerifierPreprocessedInput {
+        q_m,
+        q_l,
+        q_r,
+        q_o,
+        q_c,
+        sigma_3,
+        ..
+    } = verifier_preprocessed_input;
+    let Challenges {
+        alpha,
+        beta,
+        gamma,
+        zeta,
+        u,
+        ..
+    } = Challenges::new(&proof);
+
+    let constraint_system_summand = q_m.into_group() * a_bar * b_bar
+        + q_l.into_group() * a_bar
+        + q_r.into_group() * b_bar
+        + q_o.into_group() * c_bar
+        + q_c.into_group();
+
+    let permutation_summand_1 = z
+        * ((a_bar + beta * zeta + gamma)
+            * (b_bar + beta * k1 * zeta + gamma)
+            * (c_bar + beta * k2 * zeta + gamma)
+            * alpha
+            + lagrange_eval * alpha.square()
+            + u);
+
+    let permutation_summand_2 = sigma_3
+        * ((a_bar + beta * sigma_bar_1 + gamma)
+            * (b_bar + beta * sigma_bar_2 + gamma)
+            * alpha
+            * beta
+            * z_omega_bar);
+
+    let quotient_summand =
+        (t_lo + t_mid * zeta.pow(&[n as u64]) + t_hi * zeta.pow(&[2 * n as u64]))
+            * vanishing_polynomial_eval;
+
+    (constraint_system_summand + permutation_summand_1 - permutation_summand_2 - quotient_summand)
+        .into()
 }
