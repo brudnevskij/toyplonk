@@ -9,12 +9,13 @@ use ark_poly::{DenseUVPolynomial, Polynomial};
 use std::ops::{Add, Div, Mul, Sub};
 
 pub struct KZGProver<E: Pairing> {
-    crs: Vec<E::G1Affine>,
-    domain: Vec<E::ScalarField>,
-    g1: E::G1Affine,
-    g2: E::G2Affine,
+    pub crs: Vec<E::G1Affine>,
+    pub domain: Vec<E::ScalarField>,
+    pub g1: E::G1Affine,
+    pub g2: E::G2Affine,
 }
 
+#[derive(Clone, Debug)]
 pub struct Proof<E: Pairing> {
     pub a: E::G1Affine,
     pub b: E::G1Affine,
@@ -345,16 +346,10 @@ impl<E: Pairing> KZGProver<E> {
         t_hi: &DensePolynomial<E::ScalarField>,
     ) -> DensePolynomial<E::ScalarField> {
         let vanishing_evaluations = vanishing_polynomial.evaluate(&zeta);
-
         let zeta_n = zeta.pow(&[n as u64]);
         let zeta_2n = zeta_n.square();
-        let mut t_mid_shifted = vec![E::ScalarField::zero(); n];
-        let mut t_hi_shifted = vec![E::ScalarField::zero(); n * 2];
-        t_mid.iter().for_each(|&x| t_mid_shifted.push(x * zeta_n));
-        t_hi.iter().for_each(|&x| t_hi_shifted.push(x * zeta_2n));
 
-        (t_lo.clone() + vec_to_poly(t_mid_shifted) + vec_to_poly(t_hi_shifted))
-            .mul(vanishing_evaluations)
+        (t_lo.clone() + t_mid.mul(zeta) + t_hi.mul(zeta_2n)).mul(vanishing_evaluations)
     }
     fn compute_init_z_linearization_summand(
         &self,
@@ -567,11 +562,9 @@ impl<E: Pairing> KZGProver<E> {
         for (i, c) in t.coeffs().iter().enumerate() {
             if i < n {
                 t_lo_prime.push(c.clone());
-            }
-            if i >= n && i < 2 * n {
+            } else if i >= n && i < 2 * n {
                 t_mid_prime.push(c.clone());
-            }
-            if i >= 2 * n {
+            } else if i >= 2 * n {
                 t_hi_prime.push(c.clone());
             }
         }
