@@ -3,6 +3,7 @@ use crate::fft::{inverse_fft, vec_to_poly};
 use crate::prover::Proof;
 use crate::transccript::hash_to_field;
 use ark_ec::AffineRepr;
+use ark_ec::bn::G1Affine;
 use ark_ec::pairing::Pairing;
 use ark_ff::{Field, One, Zero};
 use ark_poly::Polynomial;
@@ -66,6 +67,8 @@ pub fn verify_kzg_proof<E: Pairing>(
     domain: &[E::ScalarField],
     k1: E::ScalarField,
     k2: E::ScalarField,
+    g1: E::G1Affine,
+    g2: E::G2Affine,
 ) -> bool {
     // 1 - 3, validation is mostly done by type system
 
@@ -106,9 +109,38 @@ pub fn verify_kzg_proof<E: Pairing>(
     );
 
     // 9. compute first part of batched PC
-    let d1 = compute_first_part_of_batched_poly(domain.len(), k1, k2, lagrange_poly_eval, vanishing_eval, proof, preprocessed_input);
-    
-    true
+    let first_part_commitment = compute_first_part_of_batched_poly(
+        domain.len(),
+        k1,
+        k2,
+        lagrange_poly_eval,
+        vanishing_eval,
+        proof,
+        preprocessed_input,
+    );
+
+    // 10. full batched PC
+    let full_batch_commitment = compute_full_batched_polynomial_commitment::<E>(
+        v,
+        first_part_commitment,
+        proof.a,
+        proof.b,
+        proof.c,
+        preprocessed_input.sigma_1,
+        preprocessed_input.sigma_2,
+    );
+
+    // 11. group encoded batch evaluations
+    let group_encoded_batch_evals = compute_group_encoded_batch_evaluations(r0, v, proof, g1);
+
+    // 12. batch validation
+    let lhs = E::pairing(proof.w_zeta + proof.w_zeta_omega * u, preprocessed_input.x);
+    let rhs = E::pairing(
+        proof.w_zeta * zeta + proof.w_zeta_omega * u * zeta * domain[1] + full_batch_commitment - group_encoded_batch_evals,
+        g2,
+    );
+
+    lhs == rhs
 }
 
 fn compute_lagrange_polynomial_eval<E: Pairing>(
@@ -221,5 +253,48 @@ fn compute_first_part_of_batched_poly<E: Pairing>(
             * vanishing_polynomial_eval;
 
     (constraint_system_summand + permutation_summand_1 - permutation_summand_2 - quotient_summand)
+        .into()
+}
+
+fn compute_full_batched_polynomial_commitment<E: Pairing>(
+    v: E::ScalarField,
+    d: E::G1Affine,
+    a: E::G1Affine,
+    b: E::G1Affine,
+    c: E::G1Affine,
+    sigma_1: E::G1Affine,
+    sigma_2: E::G1Affine,
+) -> E::G1Affine {
+    let powers_of_v = (0..=5).map(|i| v.pow(&[i as u64])).collect::<Vec<_>>();
+
+    (d + a * powers_of_v[1]
+        + b * powers_of_v[2]
+        + c * powers_of_v[3]
+        + sigma_1 * powers_of_v[4]
+        + sigma_2 * powers_of_v[5])
+        .into()
+}
+
+fn compute_group_encoded_batch_evaluations<E: Pairing>(
+    r0: E::ScalarField,
+    v: E::ScalarField,
+    proof: &Proof<E>,
+    g1: E::G1Affine,
+) -> E::G1Affine {
+    let &Proof {
+        a_bar,
+        b_bar,
+        c_bar,
+        sigma_bar_1,
+        sigma_bar_2,
+        ..
+    } = proof;
+    let powers_of_v = (0..=5).map(|i| v.pow(&[i as u64])).collect::<Vec<_>>();
+    (g1 * (-r0
+        + powers_of_v[1] * a_bar
+        + powers_of_v[2] * b_bar
+        + powers_of_v[3] * c_bar
+        + powers_of_v[4] * sigma_bar_1
+        + powers_of_v[5] * sigma_bar_2))
         .into()
 }
