@@ -7,6 +7,7 @@ use ark_poly::DenseUVPolynomial;
 use ark_poly::univariate::DensePolynomial;
 use itertools::Itertools;
 
+#[derive(Clone)]
 pub struct Circuit<F: Field> {
     pub gates: Vec<Gate<F>>,
     pub witness: Witness<F>,

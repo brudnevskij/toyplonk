@@ -7,6 +7,7 @@ use ark_poly::{DenseUVPolynomial, Polynomial};
 use ark_std::iterable::Iterable;
 use itertools::izip;
 
+#[derive(Clone)]
 pub struct Permutation<F: Field> {
     pub witness: Witness<F>,
     pub wiring: Vec<Vec<usize>>,
