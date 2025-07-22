@@ -81,12 +81,28 @@ pub fn verify_kzg_proof<E: Pairing>(
     let vanishing_eval = vanishing_polynomial.evaluate(&zeta);
 
     // 6. Lagrange poly eval
-    let l = compute_lagrange_polynomial_eval::<E>(domain.len(), domain[1], zeta);
+    let lagrange_poly_eval = compute_lagrange_polynomial_eval::<E>(domain.len(), domain[1], zeta);
 
     // 7. PI evaluation
     let pi = compute_public_input_polynomial::<E>(public_input, domain);
     let pi_eval = pi.evaluate(&zeta);
 
+    // 8. compute constant part of r(X)
+    let r0 = compute_r_constant_terms::<E>(
+        pi_eval,
+        lagrange_poly_eval,
+        alpha,
+        beta,
+        gamma,
+        proof.a_bar,
+        proof.b_bar,
+        proof.c_bar,
+        proof.sigma_bar_1,
+        proof.sigma_bar_2,
+        proof.z_omega_bar
+    );
+    
+    // 9. compute first part of batched PC
     true
 }
 
@@ -111,4 +127,25 @@ pub fn compute_public_input_polynomial<E: Pairing>(
     }
 
     vec_to_poly(inverse_fft(&evaluations, domain[1]))
+}
+
+fn compute_r_constant_terms<E: Pairing>(
+    pi: E::ScalarField,
+    lagrange_eval: E::ScalarField,
+    alpha: E::ScalarField,
+    beta: E::ScalarField,
+    gamma: E::ScalarField,
+    a_bar: E::ScalarField,
+    b_bar: E::ScalarField,
+    c_bar: E::ScalarField,
+    sigma_bar_1: E::ScalarField,
+    sigma_bar_2: E::ScalarField,
+    z_omega_bar: E::ScalarField,
+) -> E::ScalarField {
+    pi - (lagrange_eval * alpha.square())
+        - alpha
+            * (a_bar + beta * sigma_bar_1 + gamma)
+            * (b_bar + beta * sigma_bar_2 + gamma)
+            * (c_bar + gamma)
+            * z_omega_bar
 }
