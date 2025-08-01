@@ -12,7 +12,8 @@ pub struct KZGProver<E: Pairing> {
     pub crs: Vec<E::G1Affine>,
     pub domain: Vec<E::ScalarField>,
     pub g1: E::G1Affine,
-    pub g2: E::G2Affine,
+    debug_mode: bool,
+    pub prover_debug_info: Option<ProverDebugInfo<E>>,
 }
 
 #[derive(Clone, Debug)]
@@ -34,19 +35,74 @@ pub struct Proof<E: Pairing> {
     pub z_omega_bar: E::ScalarField,
 }
 
+#[derive(Debug, Clone)]
+pub struct ProverDebugInfo<E: Pairing> {
+    pub linearisation_poly: DensePolynomial<E::ScalarField>,
+
+    // quotient poly components
+    pub constraint_summand: DensePolynomial<E::ScalarField>,
+    pub permutation_summand: DensePolynomial<E::ScalarField>,
+    pub init_z_summand: DensePolynomial<E::ScalarField>,
+    pub quotient_polynomial: DensePolynomial<E::ScalarField>,
+    pub t_lo: DensePolynomial<E::ScalarField>,
+    pub t_mid: DensePolynomial<E::ScalarField>,
+    pub t_hi: DensePolynomial<E::ScalarField>,
+
+    // opening
+    pub opening_poly: DensePolynomial<E::ScalarField>,
+    pub opening_omega_poly: DensePolynomial<E::ScalarField>,
+
+    // challenges
+    pub alpha: E::ScalarField,
+    pub beta: E::ScalarField,
+    pub gamma: E::ScalarField,
+    pub zeta: E::ScalarField,
+    pub v: E::ScalarField,
+
+    // wire polys
+    pub a_poly_blinded: DensePolynomial<E::ScalarField>,
+    pub b_poly_blinded: DensePolynomial<E::ScalarField>,
+    pub c_poly_blinded: DensePolynomial<E::ScalarField>,
+
+    pub selector_polynomials: SelectorPolynomials<E::ScalarField>,
+
+    // permutation
+    pub z: DensePolynomial<E::ScalarField>,
+    pub sigma_1: DensePolynomial<E::ScalarField>,
+    pub sigma_2: DensePolynomial<E::ScalarField>,
+    pub sigma_3: DensePolynomial<E::ScalarField>,
+
+    pub public_input_poly: DensePolynomial<E::ScalarField>,
+}
+
 impl<E: Pairing> KZGProver<E> {
+    pub fn new(
+        crs: Vec<E::G1Affine>,
+        domain: Vec<E::ScalarField>,
+        g1: E::G1Affine,
+        debug_mode: bool,
+    ) -> Self {
+        Self {
+            crs,
+            domain,
+            g1,
+            debug_mode,
+            prover_debug_info: None,
+        }
+    }
     pub fn generate_proof(
-        &self,
+        &mut self,
         circuit: Circuit<E::ScalarField>,
         blinding_scalars: &[E::ScalarField],
     ) -> Proof<E> {
         let n = circuit.gates.len();
         assert_eq!(blinding_scalars.len(), 11);
-        assert_eq!(self.crs.len(), n + 5);
+        assert_eq!(self.crs.len(), n + 5 + 1);
 
         let mut commitment_buffer = Vec::new();
         let vanishing_poly = Circuit::vanishing_poly(&self.domain);
         let witness_polynomial = circuit.get_witness_polynomials();
+
         let a = witness_polynomial.a.clone();
         let b = witness_polynomial.b.clone();
         let c = witness_polynomial.c.clone();
@@ -98,13 +154,15 @@ impl<E: Pairing> KZGProver<E> {
 
         // round three, computing quotient polynomial
         // first summand
-        let gcp = DenseOrSparsePolynomial::from(circuit.get_gate_constraint_polynomial());
-        let zh = DenseOrSparsePolynomial::from(vanishing_poly.clone());
-        let (first_summand, r) = gcp.divide_with_q_and_r(&zh).unwrap();
-        assert!(
-            r.is_zero(),
-            "gate constraint has non zero remainder: {:?}",
-            r
+        let public_input_poly = circuit.compute_public_input_polynomial();
+        let selector_polynomials = circuit.get_selector_polynomials();
+        let constraint_summand = self.compute_constraint_summand(
+            &a_poly,
+            &b_poly,
+            &c_poly,
+            public_input_poly.clone(),
+            &vanishing_poly,
+            &selector_polynomials,
         );
 
         // second summand, permutation 2
@@ -119,7 +177,9 @@ impl<E: Pairing> KZGProver<E> {
             self.compute_init_z_summand(alpha, &vanishing_poly, &z, &lagrange_base_1);
 
         let permutation_summand = self.compute_permutation_summand(
-            witness_polynomial,
+            &a_poly,
+            &b_poly,
+            &c_poly,
             &sigma_polynomials,
             beta,
             gamma,
@@ -130,7 +190,8 @@ impl<E: Pairing> KZGProver<E> {
             alpha,
         );
 
-        let quotient_polynomial = first_summand + permutation_summand + init_z_summand;
+        let quotient_polynomial =
+            constraint_summand.clone() + permutation_summand.clone() + init_z_summand.clone();
 
         let (t_lo, t_mid, t_hi) = Self::split_quotient_polynomial(
             &quotient_polynomial,
@@ -149,14 +210,14 @@ impl<E: Pairing> KZGProver<E> {
         // round 4
         let zeta = hash_to_field("zeta", &commitment_buffer);
 
-        let a_bar = a.evaluate(&zeta);
-        let b_bar = b.evaluate(&zeta);
-        let c_bar = c.evaluate(&zeta);
+        let a_bar = a_poly.evaluate(&zeta);
+        let b_bar = b_poly.evaluate(&zeta);
+        let c_bar = c_poly.evaluate(&zeta);
 
         let sigma_bar_1 = sigma_polynomials.0.evaluate(&zeta);
         let sigma_bar_2 = sigma_polynomials.1.evaluate(&zeta);
 
-        let z_omega_bar = z.evaluate(&zeta.mul(self.domain[1]));
+        let z_omega_bar = z.evaluate(&(zeta * self.domain[1]));
 
         // round 5
         // previous round's output could be added to transcript
@@ -176,8 +237,8 @@ impl<E: Pairing> KZGProver<E> {
             zeta,
             circuit.permutation.k1,
             circuit.permutation.k2,
-            &circuit.get_selector_polynomials(),
-            &circuit.compute_public_input_polynomial(),
+            &selector_polynomials,
+            &public_input_poly,
             &z,
             &sigma_polynomials.2,
             &lagrange_base_1,
@@ -196,9 +257,9 @@ impl<E: Pairing> KZGProver<E> {
             sigma_bar_1,
             sigma_bar_2,
             &linearisation_polynomial,
-            &a,
-            &b,
-            &c,
+            &a_poly,
+            &b_poly,
+            &c_poly,
             &sigma_polynomials.0,
             &sigma_polynomials.1,
         );
@@ -212,7 +273,42 @@ impl<E: Pairing> KZGProver<E> {
         let w_zeta_omega_commitment = Self::commit_polynomial(&w_zeta_omega, &self.crs, self.g1);
         commitment_buffer.push(w_zeta_omega_commitment);
 
-        // let u = hash_to_field("u", &commitment_buffer);
+        if self.debug_mode {
+            self.prover_debug_info = Some(ProverDebugInfo {
+                linearisation_poly: linearisation_polynomial,
+                constraint_summand,
+                permutation_summand,
+                init_z_summand,
+
+                quotient_polynomial,
+                t_lo,
+                t_mid,
+                t_hi,
+
+                opening_poly: w_zeta,
+                opening_omega_poly: w_zeta_omega,
+
+                alpha,
+                beta,
+                gamma,
+                zeta,
+                v,
+
+                a_poly_blinded: a_poly,
+                b_poly_blinded: b_poly,
+                c_poly_blinded: c_poly,
+
+                selector_polynomials,
+
+                z,
+                sigma_1: sigma_polynomials.0,
+                sigma_2: sigma_polynomials.1,
+                sigma_3: sigma_polynomials.2,
+
+                public_input_poly,
+            });
+        }
+
         Proof {
             a: a_commitment,
             b: b_commitment,
@@ -232,6 +328,41 @@ impl<E: Pairing> KZGProver<E> {
         }
     }
 
+    fn compute_constraint_summand(
+        &self,
+        blinded_a: &DensePolynomial<E::ScalarField>,
+        blinded_b: &DensePolynomial<E::ScalarField>,
+        blinded_c: &DensePolynomial<E::ScalarField>,
+        pi: DensePolynomial<E::ScalarField>,
+        vanishing_poly: &DensePolynomial<E::ScalarField>,
+        selector_polynomials: &SelectorPolynomials<E::ScalarField>,
+    ) -> DensePolynomial<E::ScalarField> {
+        let SelectorPolynomials {
+            q_l,
+            q_r,
+            q_m,
+            q_o,
+            q_c,
+        } = selector_polynomials;
+
+        let blinded_constraint_poly = blinded_a.naive_mul(&blinded_b).naive_mul(q_m)
+            + blinded_a.naive_mul(q_l)
+            + blinded_b.naive_mul(q_r)
+            + blinded_c.naive_mul(q_o)
+            + pi
+            + q_c.clone();
+        let blinded_constraint_poly = DenseOrSparsePolynomial::from(blinded_constraint_poly);
+
+        let (constraint_summand, r) = blinded_constraint_poly
+            .divide_with_q_and_r(&vanishing_poly.into())
+            .unwrap();
+        assert!(
+            r.is_zero(),
+            "gate constraint has non zero remainder: {:?}",
+            r
+        );
+        constraint_summand
+    }
     fn compute_opening_proof_polynomial(
         &self,
         v: E::ScalarField,
@@ -271,7 +402,7 @@ impl<E: Pairing> KZGProver<E> {
             .div(&vec_to_poly(vec![-zeta * omega, E::ScalarField::one()]))
     }
 
-    fn compute_linearisation_polynomial(
+    pub fn compute_linearisation_polynomial(
         &self,
         a_bar: E::ScalarField,
         b_bar: E::ScalarField,
@@ -295,7 +426,7 @@ impl<E: Pairing> KZGProver<E> {
         t_mid: &DensePolynomial<E::ScalarField>,
         t_hi: &DensePolynomial<E::ScalarField>,
     ) -> DensePolynomial<E::ScalarField> {
-        let constraint_lin_summand = self.calculate_constraint_linearisation_summand(
+        let constraint_lin_summand = self.compute_constraint_linearisation_summand(
             a_bar,
             b_bar,
             c_bar,
@@ -333,10 +464,11 @@ impl<E: Pairing> KZGProver<E> {
             t_hi,
         );
 
-        constraint_lin_summand + permutation_lin_summand + init_z_lin_summand + quotient_summand
+        (constraint_lin_summand + permutation_lin_summand + init_z_lin_summand)
+            .sub(&quotient_summand)
     }
 
-    fn compute_quotient_linearization_summand(
+    pub fn compute_quotient_linearization_summand(
         &self,
         n: usize,
         zeta: E::ScalarField,
@@ -345,13 +477,13 @@ impl<E: Pairing> KZGProver<E> {
         t_mid: &DensePolynomial<E::ScalarField>,
         t_hi: &DensePolynomial<E::ScalarField>,
     ) -> DensePolynomial<E::ScalarField> {
-        let vanishing_evaluations = vanishing_polynomial.evaluate(&zeta);
+        let vanishing_z = vanishing_polynomial.evaluate(&zeta);
         let zeta_n = zeta.pow(&[n as u64]);
         let zeta_2n = zeta_n.square();
 
-        (t_lo.clone() + t_mid.mul(zeta) + t_hi.mul(zeta_2n)).mul(vanishing_evaluations)
+        (t_lo.clone() + t_mid.mul(zeta_n) + t_hi.mul(zeta_2n)).mul(vanishing_z)
     }
-    fn compute_init_z_linearization_summand(
+    pub fn compute_init_z_linearization_summand(
         &self,
         alpha: E::ScalarField,
         zeta: E::ScalarField,
@@ -360,14 +492,14 @@ impl<E: Pairing> KZGProver<E> {
     ) -> DensePolynomial<E::ScalarField> {
         let lagrange_base_evaluation = lagrange_base_1.evaluate(&zeta);
         // Z(x) - 1
-        z.sub(&vec_to_poly(vec![-E::ScalarField::one()]))
+        z.sub(&constant_polynomial(E::ScalarField::one()))
             // (Z(x) - 1)L1(z)
             .mul(lagrange_base_evaluation)
             // a^2 *[(Z(x) - 1)L1(z)]
-            .mul(alpha.pow(&[2u64]))
+            .mul(alpha.square())
     }
 
-    fn compute_permutation_linearization_summand(
+    pub fn compute_permutation_linearization_summand(
         &self,
         a_bar: E::ScalarField,
         b_bar: E::ScalarField,
@@ -391,17 +523,17 @@ impl<E: Pairing> KZGProver<E> {
 
         // (c(z) + beta * S(x) + gamma )
         // because c_bar is constant I add it to gamma
-        let permut_2_c = sigma_3.mul(beta) + vec_to_poly(vec![c_bar + gamma]);
+        let permut_2_c = sigma_3.mul(beta) + constant_polynomial(c_bar + gamma);
         let permut_summand_2 = permut_2_c.mul(
             (a_bar + beta * sigma_bar_1 + gamma)
                 * (b_bar + beta * sigma_bar_2 + gamma)
                 * z_omega_bar,
         );
 
-        permut_summand_1.sub(&permut_summand_2).mul(alpha)
+        (permut_summand_1.sub(&permut_summand_2)).mul(alpha)
     }
 
-    fn calculate_constraint_linearisation_summand(
+    pub fn compute_constraint_linearisation_summand(
         &self,
         a_bar: E::ScalarField,
         b_bar: E::ScalarField,
@@ -410,7 +542,7 @@ impl<E: Pairing> KZGProver<E> {
         public_polynomial: &DensePolynomial<E::ScalarField>,
         zeta: E::ScalarField,
     ) -> DensePolynomial<E::ScalarField> {
-        let pi_eval = vec_to_poly(vec![public_polynomial.evaluate(&zeta)]);
+        let pi_eval = constant_polynomial(public_polynomial.evaluate(&zeta));
         let SelectorPolynomials {
             q_l,
             q_r,
@@ -428,7 +560,9 @@ impl<E: Pairing> KZGProver<E> {
 
     fn compute_permutation_summand(
         &self,
-        witness_polynomials: WitnessPolynomials<E::ScalarField>,
+        a: &DensePolynomial<E::ScalarField>,
+        b: &DensePolynomial<E::ScalarField>,
+        c: &DensePolynomial<E::ScalarField>,
         sigma_polynomials: &(
             DensePolynomial<E::ScalarField>,
             DensePolynomial<E::ScalarField>,
@@ -443,7 +577,9 @@ impl<E: Pairing> KZGProver<E> {
         alpha: E::ScalarField,
     ) -> DensePolynomial<E::ScalarField> {
         let permutation_summand_1 = self.compute_first_permutation_summand(
-            witness_polynomials.clone(),
+            a.clone(),
+            b.clone(),
+            c.clone(),
             beta,
             gamma,
             k1,
@@ -452,7 +588,9 @@ impl<E: Pairing> KZGProver<E> {
         );
 
         let permutation_summand_2 = self.compute_second_permutation_summand(
-            witness_polynomials.clone(),
+            a.clone(),
+            b.clone(),
+            c.clone(),
             &sigma_polynomials,
             beta,
             gamma,
@@ -475,14 +613,15 @@ impl<E: Pairing> KZGProver<E> {
 
     fn compute_first_permutation_summand(
         &self,
-        witness_polynomials: WitnessPolynomials<E::ScalarField>,
+        a: DensePolynomial<E::ScalarField>,
+        b: DensePolynomial<E::ScalarField>,
+        c: DensePolynomial<E::ScalarField>,
         beta: E::ScalarField,
         gamma: E::ScalarField,
         k1: E::ScalarField,
         k2: E::ScalarField,
         z: &DensePolynomial<E::ScalarField>,
     ) -> DensePolynomial<E::ScalarField> {
-        let WitnessPolynomials { a, b, c } = witness_polynomials;
         let a_multiply = vec_to_poly(vec![gamma, beta]) + a;
         let b_multiply = vec_to_poly(vec![gamma, beta * k1]) + b;
         let c_multiply = vec_to_poly(vec![gamma, beta * k2]) + c;
@@ -495,7 +634,9 @@ impl<E: Pairing> KZGProver<E> {
 
     fn compute_second_permutation_summand(
         &self,
-        witness_polynomials: WitnessPolynomials<E::ScalarField>,
+        a: DensePolynomial<E::ScalarField>,
+        b: DensePolynomial<E::ScalarField>,
+        c: DensePolynomial<E::ScalarField>,
         sigma_polynomials: &(
             DensePolynomial<E::ScalarField>,
             DensePolynomial<E::ScalarField>,
@@ -505,7 +646,6 @@ impl<E: Pairing> KZGProver<E> {
         gamma: E::ScalarField,
         z: &DensePolynomial<E::ScalarField>,
     ) -> DensePolynomial<E::ScalarField> {
-        let WitnessPolynomials { a, b, c } = witness_polynomials;
         let (sigma_1, sigma_2, sigma_3) = sigma_polynomials;
 
         let gamma_constant_poly = vec_to_poly(vec![gamma]);
@@ -533,9 +673,9 @@ impl<E: Pairing> KZGProver<E> {
         lagrange_basis_1: &DensePolynomial<E::ScalarField>,
     ) -> DensePolynomial<E::ScalarField> {
         let last_summand = z
-            .add(&vec_to_poly(vec![-E::ScalarField::one()]))
+            .add(&constant_polynomial(-E::ScalarField::one()))
             .naive_mul(lagrange_basis_1)
-            .mul(&vec_to_poly(vec![alpha.pow(&[2u64])]));
+            .mul(alpha.square());
 
         let (last_summand, r) = DenseOrSparsePolynomial::from(last_summand)
             .divide_with_q_and_r(&vanishing_polynomial.into())
@@ -612,12 +752,12 @@ impl<E: Pairing> KZGProver<E> {
         g1: E::G1Affine, // this is [1]_1
     ) -> E::G1Affine {
         if polynomial.coeffs.len() < 1 {
-            return g1;
+            return E::G1Affine::zero();
         }
         let mut acc = g1.into_group() * polynomial.coeffs[0]; // constant term
 
         for (i, coeff) in polynomial.coeffs.iter().skip(1).enumerate() {
-            acc += crs[i].into_group() * coeff; // crs[i] = [x^{i+1}]_1
+            acc += crs[i + 1].into_group() * coeff; 
         }
 
         acc.into_affine()
@@ -643,10 +783,6 @@ mod tests {
     }
 
     fn dummy_crs<E: Pairing>(degree: usize) -> (Vec<E::G1Affine>, Vec<E::G2Affine>) {
-        use ark_ec::Group;
-        use ark_ff::UniformRand;
-        use ark_std::test_rng;
-
         let mut rng = test_rng();
         let tau = E::ScalarField::rand(&mut rng);
         let g1_gen = E::G1::generator();
@@ -661,6 +797,25 @@ mod tests {
             .collect();
 
         (crs_g1, crs_g2)
+    }
+
+    fn dummy_crs_tau<E: Pairing>(
+        degree: usize,
+    ) -> (Vec<E::G1Affine>, Vec<E::G2Affine>, E::ScalarField) {
+        let mut rng = test_rng();
+        let tau = E::ScalarField::rand(&mut rng);
+        let g1_gen = E::G1::generator();
+        let g2_gen = E::G2::generator();
+
+        let crs_g1 = (0..=degree)
+            .map(|i| (g1_gen * tau.pow(&[i as u64])).into_affine())
+            .collect();
+
+        let crs_g2 = (0..=degree)
+            .map(|i| (g2_gen * tau.pow(&[i as u64])).into_affine())
+            .collect();
+
+        (crs_g1, crs_g2, tau)
     }
 
     #[test]
@@ -737,8 +892,6 @@ mod tests {
         let rolling_product_poly = permutation.get_rolling_product(gamma, beta, &domain);
         let z_evals = crate::fft::fft(&rolling_product_poly.coeffs, domain[1]);
 
-        // 1. Last value is 1
-        println!("z evals: {:?}", z_evals);
         assert_eq!(z_evals[0], Fr::one());
 
         // 2. Recurrence holds for 1..n-1
@@ -831,6 +984,44 @@ mod tests {
             fr(5),
         )
     }
+
+    fn dummy_circuit2() -> Circuit<Fr> {
+        let n = 4;
+        let omega = Fr::get_root_of_unity(n as u64).unwrap();
+        let domain: Vec<Fr> = (0..n).map(|i| omega.pow(&[i as u64])).collect();
+
+        let gate0 = Gate::new(fr(1), fr(0), fr(0), fr(0), fr(0)); // a = x₀
+        let gate1 = Gate::new(fr(1), fr(0), fr(0), fr(0), fr(0)); // a = x₁
+        let gate2 = Gate::new(fr(1), fr(1), fr(1), -fr(1), fr(0)); // a + b + ab = c
+        let gate3 = Gate::new(fr(1), fr(1), fr(0), -fr(1), fr(0)); // padding (optional)
+
+        let gates = vec![gate0, gate1, gate2, gate3];
+
+        // Witness
+        let witness = Witness {
+            a: vec![fr(3), fr(4), fr(3), fr(3)], // a[0]=x₀, a[1]=x₁, a[2]=x₀ for gate2
+            b: vec![fr(0), fr(0), fr(4), fr(4)], // b[2]=x₁ for gate2
+            c: vec![fr(0), fr(0), fr(19), fr(7)], // c[2] = 3 + 4 + 3 * 4 = 19
+        };
+
+        let public_inputs = vec![fr(3), fr(4)];
+
+        let circuit = Circuit::new(
+            gates,
+            witness,
+            public_inputs,
+            domain.clone(),
+            vec![vec![1, 6, 7], vec![0, 2, 3]],
+            fr(3),
+            fr(5),
+        );
+        assert!(circuit.is_gate_constraint_polynomial_zero_over_h(
+            &circuit.get_selector_polynomials(),
+            &circuit.get_witness_polynomials(),
+            &circuit.compute_public_input_polynomial()
+        ));
+        circuit
+    }
     #[test]
     fn test_gate_constraint_summand_divides_zh() {
         let circuit = dummy_circuit(); // Build a simple known-valid circuit
@@ -866,18 +1057,33 @@ mod tests {
         let g1 = G1Projective::generator().into_affine();
         let g2 = G2Projective::generator().into_affine();
 
-        let prover = KZGProver::<Bls12_381> {
-            crs: crs_g1,
-            domain: circuit.domain.clone(),
-            g1,
-            g2,
-        };
+        let prover = KZGProver::<Bls12_381>::new(crs_g1, circuit.domain.clone(), g1, false);
 
         let mut rng = test_rng();
         let beta = Fr::rand(&mut rng);
         let gamma = Fr::rand(&mut rng);
         let alpha = Fr::rand(&mut rng);
 
+        let vanishing_poly = Circuit::vanishing_poly(&circuit.domain);
+
+        let a = KZGProver::<Bls12_381>::compute_wire_coefficients_form(
+            fr(2),
+            fr(3),
+            &witness_polys.a,
+            &vanishing_poly,
+        );
+        let b = KZGProver::<Bls12_381>::compute_wire_coefficients_form(
+            fr(2),
+            fr(3),
+            &witness_polys.b,
+            &vanishing_poly,
+        );
+        let c = KZGProver::<Bls12_381>::compute_wire_coefficients_form(
+            fr(2),
+            fr(3),
+            &witness_polys.c,
+            &vanishing_poly,
+        );
         let z = circuit
             .permutation
             .get_rolling_product(gamma, beta, &circuit.domain);
@@ -889,7 +1095,9 @@ mod tests {
 
         // Compute raw LHS - RHS (not divided)
         let lhs = prover.compute_first_permutation_summand(
-            witness_polys.clone(),
+            a.clone(),
+            b.clone(),
+            c.clone(),
             beta,
             gamma,
             circuit.permutation.k1,
@@ -898,7 +1106,9 @@ mod tests {
         );
 
         let rhs = prover.compute_second_permutation_summand(
-            witness_polys.clone(),
+            a.clone(),
+            b.clone(),
+            c.clone(),
             &sigma_polys.clone(),
             beta,
             gamma,
@@ -909,7 +1119,9 @@ mod tests {
 
         // Now compute your summand (already divided by Z_H)
         let quotient_summand = prover.compute_permutation_summand(
-            witness_polys,
+            &a,
+            &b,
+            &c,
             &sigma_polys,
             beta,
             gamma,
@@ -935,14 +1147,8 @@ mod tests {
 
         let (crs_g1, _) = dummy_crs::<Bls12_381>(circuit.domain.len() + 5);
         let g1 = G1Projective::generator().into_affine();
-        let g2 = G2Projective::generator().into_affine();
 
-        let prover = KZGProver::<Bls12_381> {
-            crs: crs_g1,
-            domain: circuit.domain.clone(),
-            g1,
-            g2,
-        };
+        let prover = KZGProver::<Bls12_381>::new(crs_g1, circuit.domain.clone(), g1, false);
 
         let mut rng = test_rng();
         let alpha = Fr::rand(&mut rng);
@@ -989,14 +1195,9 @@ mod tests {
         let g1 = G1Projective::generator().into_affine();
         let g2 = G2Projective::generator().into_affine();
 
-        let prover = KZGProver::<Bls12_381> {
-            crs: crs_g1,
-            domain: circuit.domain.clone(),
-            g1,
-            g2,
-        };
+        let prover = KZGProver::<Bls12_381>::new(crs_g1, circuit.domain.clone(), g1, false);
         let poly = prover
-            .calculate_constraint_linearisation_summand(a_bar, b_bar, c_bar, &selector, &pi, zeta);
+            .compute_constraint_linearisation_summand(a_bar, b_bar, c_bar, &selector, &pi, zeta);
         let eval = poly.evaluate(&zeta);
 
         // Manual check
@@ -1020,12 +1221,7 @@ mod tests {
         let g1 = G1Projective::generator().into_affine();
         let g2 = G2Projective::generator().into_affine();
 
-        let prover = KZGProver::<Bls12_381> {
-            crs: crs_g1,
-            domain: circuit.domain.clone(),
-            g1,
-            g2,
-        };
+        let prover = KZGProver::<Bls12_381>::new(crs_g1, circuit.domain.clone(), g1, false);
 
         // Use known t_lo, t_mid, t_hi
         let t_lo = DensePolynomial::from_coefficients_vec(vec![fr(1); 4]);
@@ -1063,12 +1259,7 @@ mod tests {
         let g1 = G1Projective::generator().into_affine();
         let g2 = G2Projective::generator().into_affine();
 
-        let prover = KZGProver::<Bls12_381> {
-            crs: crs_g1,
-            domain: circuit.domain.clone(),
-            g1,
-            g2,
-        };
+        let prover = KZGProver::<Bls12_381>::new(crs_g1, circuit.domain.clone(), g1, false);
 
         let lin = prover.compute_init_z_linearization_summand(alpha, zeta, &z, &lagrange_base);
         let eval = lin.evaluate(&zeta);
@@ -1077,22 +1268,16 @@ mod tests {
         assert_eq!(eval, expected);
     }
     #[test]
-    fn test_permutation_linearization_summand_correctness() {
+    fn test_permutation_linearisation_summand_correctness() {
         let circuit = dummy_circuit();
 
         let (crs_g1, _) = dummy_crs::<Bls12_381>(circuit.domain.len() + 5);
         let g1 = G1Projective::generator().into_affine();
         let g2 = G2Projective::generator().into_affine();
 
-        let prover = KZGProver::<Bls12_381> {
-            crs: crs_g1,
-            domain: circuit.domain.clone(),
-            g1,
-            g2,
-        };
+        let prover = KZGProver::<Bls12_381>::new(crs_g1, circuit.domain.clone(), g1, false);
         let witness = circuit.get_witness_polynomials();
         let zeta = circuit.domain[1];
-        let zh = Circuit::vanishing_poly(&circuit.domain);
 
         let mut rng = test_rng();
         let alpha = Fr::rand(&mut rng);
@@ -1147,21 +1332,482 @@ mod tests {
     }
 
     #[test]
-    fn test_opening_polynomial_evaluation_correctness() {
+    fn test_quotient_summands_over_linearisations() {
+        let circuit = dummy_circuit2();
+
+        let (crs_g1, _) = dummy_crs::<Bls12_381>(circuit.domain.len() + 5);
+        let g1 = G1Projective::generator().into_affine();
+        let g2 = G2Projective::generator().into_affine();
         let mut rng = test_rng();
-        let zeta = Fr::rand(&mut rng);
-        let x_poly = vec_to_poly(vec![-zeta, Fr::one()]); // (X - zeta)
 
-        let f = vec_to_poly((0..8).map(|_| Fr::rand(&mut rng)).collect());
-        let f_zeta = f.evaluate(&zeta);
+        let mut prover = KZGProver::<Bls12_381>::new(crs_g1, circuit.domain.clone(), g1, true);
+        let blinding_scalars: Vec<Fr> = (0..11).map(|_| Fr::rand(&mut rng)).collect();
+        let witness = circuit.get_witness_polynomials();
 
-        let quotient = &f - &vec_to_poly(vec![f_zeta]);
-        let opening_poly = &quotient / &x_poly;
+        prover.generate_proof(circuit.clone(), &blinding_scalars);
+        let debug_info = prover.prover_debug_info.clone().unwrap();
+        let alpha = debug_info.alpha;
+        let beta = debug_info.beta;
+        let gamma = debug_info.gamma;
+        let zeta = debug_info.zeta;
 
-        let recovered = &opening_poly * &x_poly + vec_to_poly(vec![f_zeta]);
-        for i in 0..10 {
-            let point = Fr::from(i as u64);
-            assert_eq!(f.evaluate(&point), recovered.evaluate(&point));
-        }
+        let vanishing_poly = &Circuit::vanishing_poly(&circuit.domain);
+        let rolling_product = circuit
+            .permutation
+            .get_rolling_product(gamma, beta, &circuit.domain);
+        let z = KZGProver::<Bls12_381>::compute_permutation_polynomial(
+            blinding_scalars[6],
+            blinding_scalars[7],
+            blinding_scalars[8],
+            vanishing_poly,
+            &rolling_product,
+        );
+        let sigma_maps = circuit.permutation.get_sigma_maps();
+        let sigma_polys = circuit
+            .permutation
+            .generate_sigma_polynomials(sigma_maps, &circuit.domain);
+
+        let a_blinded = KZGProver::<Bls12_381>::compute_wire_coefficients_form(
+            blinding_scalars[0],
+            blinding_scalars[1],
+            &witness.a,
+            vanishing_poly,
+        );
+        let b_blinded = KZGProver::<Bls12_381>::compute_wire_coefficients_form(
+            blinding_scalars[2],
+            blinding_scalars[3],
+            &witness.b,
+            vanishing_poly,
+        );
+        let c_blinded = KZGProver::<Bls12_381>::compute_wire_coefficients_form(
+            blinding_scalars[4],
+            blinding_scalars[5],
+            &witness.c,
+            vanishing_poly,
+        );
+        let a_bar = a_blinded.evaluate(&zeta);
+        let b_bar = b_blinded.evaluate(&zeta);
+        let c_bar = c_blinded.evaluate(&zeta);
+        let sigma_bar_1 = sigma_polys.0.evaluate(&zeta);
+        let sigma_bar_2 = sigma_polys.1.evaluate(&zeta);
+        let z_omega_bar = z.evaluate(&(zeta * circuit.domain[1]));
+        let lagrange_basis = &compute_lagrange_base(1, &circuit.domain);
+        let pi = circuit.compute_public_input_polynomial();
+        let selector_polys = circuit.get_selector_polynomials();
+
+        let constraint_summand = prover.compute_constraint_summand(
+            &a_blinded,
+            &b_blinded,
+            &c_blinded,
+            pi.clone(),
+            vanishing_poly,
+            &selector_polys,
+        );
+
+        let lin_constraint_summand = prover.compute_constraint_linearisation_summand(
+            a_bar,
+            b_bar,
+            c_bar,
+            &selector_polys,
+            &pi,
+            zeta,
+        );
+        assert_eq!(
+            constraint_summand
+                .evaluate(&zeta)
+                .mul(vanishing_poly.evaluate(&zeta)),
+            lin_constraint_summand.evaluate(&zeta),
+            "Constraint portion differs at zeta"
+        );
+
+        let permutation_summand = prover.compute_permutation_summand(
+            &a_blinded,
+            &b_blinded,
+            &c_blinded,
+            &sigma_polys,
+            beta,
+            gamma,
+            circuit.permutation.k1,
+            circuit.permutation.k2,
+            &z,
+            vanishing_poly,
+            alpha,
+        );
+
+        let lin_permut_summand = prover.compute_permutation_linearization_summand(
+            a_bar,
+            b_bar,
+            c_bar,
+            sigma_bar_1,
+            sigma_bar_2,
+            z_omega_bar,
+            alpha,
+            beta,
+            gamma,
+            zeta,
+            circuit.permutation.k1,
+            circuit.permutation.k2,
+            &z,
+            &sigma_polys.2,
+        );
+        assert_eq!(
+            permutation_summand
+                .evaluate(&zeta)
+                .mul(vanishing_poly.evaluate(&zeta)),
+            lin_permut_summand.evaluate(&zeta)
+        );
+
+        let init_zsummand =
+            prover.compute_init_z_summand(alpha, &vanishing_poly, &z, &lagrange_basis);
+        let init_z_summand_lin =
+            prover.compute_init_z_linearization_summand(alpha, zeta, &z, lagrange_basis);
+        assert_eq!(
+            init_zsummand
+                .evaluate(&zeta)
+                .mul(vanishing_poly.evaluate(&zeta)),
+            init_z_summand_lin.evaluate(&zeta)
+        );
+
+        let t = constraint_summand + permutation_summand + init_zsummand;
+
+        let (t_lo, t_mid, t_hi) = KZGProver::<Bls12_381>::split_quotient_polynomial(
+            &t,
+            blinding_scalars[9],
+            blinding_scalars[10],
+            circuit.domain.len(),
+        );
+
+        let quotient_summand = prover.compute_quotient_linearization_summand(
+            circuit.domain.len(),
+            zeta,
+            vanishing_poly,
+            &t_lo,
+            &t_mid,
+            &t_hi,
+        );
+        let zeta_n = zeta.pow(&[circuit.domain.len() as u64]);
+        let zeta_2n = zeta_n.square();
+        let t_reconstructed_z = t_lo.clone() + t_mid.mul(zeta_n) + t_hi.mul(zeta_2n);
+
+        assert_eq!(
+            quotient_summand.evaluate(&zeta),
+            t_reconstructed_z
+                .evaluate(&zeta)
+                .mul(vanishing_poly.evaluate(&zeta))
+        );
+
+        let r = prover.compute_linearisation_polynomial(
+            a_bar,
+            b_bar,
+            c_bar,
+            sigma_bar_1,
+            sigma_bar_2,
+            z_omega_bar,
+            alpha,
+            beta,
+            gamma,
+            zeta,
+            circuit.permutation.k1,
+            circuit.permutation.k2,
+            &selector_polys,
+            &pi,
+            &z,
+            &sigma_polys.2,
+            lagrange_basis,
+            vanishing_poly,
+            &t_lo,
+            &t_mid,
+            &t_hi,
+        );
+
+        assert!(r.evaluate(&zeta).is_zero())
+    }
+
+    #[test]
+    fn test_linearisation_polynomial() {
+        let circuit = dummy_circuit2();
+
+        let (crs_g1, _) = dummy_crs::<Bls12_381>(circuit.domain.len() + 5);
+        let g1 = G1Projective::generator().into_affine();
+        let g2 = G2Projective::generator().into_affine();
+        let mut rng = test_rng();
+
+        let mut prover = KZGProver::<Bls12_381>::new(crs_g1, circuit.domain.clone(), g1, true);
+        let blinding_scalars: Vec<Fr> = (0..11).map(|_| Fr::rand(&mut rng)).collect();
+        let witness = circuit.get_witness_polynomials();
+
+        prover.generate_proof(circuit.clone(), &blinding_scalars);
+        let debug_info = prover.prover_debug_info.clone().unwrap();
+        let alpha = debug_info.alpha;
+        let beta = debug_info.beta;
+        let gamma = debug_info.gamma;
+        let zeta = debug_info.zeta;
+
+        let vanishing_poly = &Circuit::vanishing_poly(&circuit.domain);
+        let rolling_product = circuit
+            .permutation
+            .get_rolling_product(gamma, beta, &circuit.domain);
+        let z = KZGProver::<Bls12_381>::compute_permutation_polynomial(
+            blinding_scalars[6],
+            blinding_scalars[7],
+            blinding_scalars[8],
+            vanishing_poly,
+            &rolling_product,
+        );
+        let sigma_maps = circuit.permutation.get_sigma_maps();
+        let sigma_polys = circuit
+            .permutation
+            .generate_sigma_polynomials(sigma_maps, &circuit.domain);
+
+        let a_blinded = KZGProver::<Bls12_381>::compute_wire_coefficients_form(
+            blinding_scalars[0],
+            blinding_scalars[1],
+            &witness.a,
+            vanishing_poly,
+        );
+        let b_blinded = KZGProver::<Bls12_381>::compute_wire_coefficients_form(
+            blinding_scalars[2],
+            blinding_scalars[3],
+            &witness.b,
+            vanishing_poly,
+        );
+        let c_blinded = KZGProver::<Bls12_381>::compute_wire_coefficients_form(
+            blinding_scalars[4],
+            blinding_scalars[5],
+            &witness.c,
+            vanishing_poly,
+        );
+        let a_bar = a_blinded.evaluate(&zeta);
+        let b_bar = b_blinded.evaluate(&zeta);
+        let c_bar = c_blinded.evaluate(&zeta);
+        let sigma_bar_1 = sigma_polys.0.evaluate(&zeta);
+        let sigma_bar_2 = sigma_polys.1.evaluate(&zeta);
+        let z_omega_bar = z.evaluate(&(zeta * circuit.domain[1]));
+        let lagrange_basis = &compute_lagrange_base(1, &circuit.domain);
+        let pi = circuit.compute_public_input_polynomial();
+        let selector_polys = circuit.get_selector_polynomials();
+
+        let constraint_summand = prover.compute_constraint_summand(
+            &a_blinded,
+            &b_blinded,
+            &c_blinded,
+            pi.clone(),
+            vanishing_poly,
+            &selector_polys,
+        );
+        let permutation_summand = prover.compute_permutation_summand(
+            &a_blinded,
+            &b_blinded,
+            &c_blinded,
+            &sigma_polys,
+            beta,
+            gamma,
+            circuit.permutation.k1,
+            circuit.permutation.k2,
+            &z,
+            vanishing_poly,
+            alpha,
+        );
+        let init_zsummand =
+            prover.compute_init_z_summand(alpha, &vanishing_poly, &z, &lagrange_basis);
+        let t = constraint_summand + permutation_summand + init_zsummand;
+        let (t_lo, t_mid, t_hi) = KZGProver::<Bls12_381>::split_quotient_polynomial(
+            &t,
+            blinding_scalars[9],
+            blinding_scalars[10],
+            circuit.domain.len(),
+        );
+
+        let r = prover.compute_linearisation_polynomial(
+            a_bar,
+            b_bar,
+            c_bar,
+            sigma_bar_1,
+            sigma_bar_2,
+            z_omega_bar,
+            alpha,
+            beta,
+            gamma,
+            zeta,
+            circuit.permutation.k1,
+            circuit.permutation.k2,
+            &selector_polys,
+            &pi,
+            &z,
+            &sigma_polys.2,
+            lagrange_basis,
+            vanishing_poly,
+            &t_lo,
+            &t_mid,
+            &t_hi,
+        );
+        assert_eq!(debug_info.linearisation_poly, r);
+        assert!(r.evaluate(&zeta).is_zero(), "R is not zero at z");
+        assert!(debug_info.linearisation_poly.evaluate(&zeta).is_zero());
+    }
+
+    #[test]
+    fn test_opening_polynomial_reconstruction() {
+        let circuit = dummy_circuit();
+        let domain = circuit.domain.clone();
+        let (crs, _) = dummy_crs::<Bls12_381>(circuit.domain.len() + 5);
+        let g1 = G1Projective::generator().into_affine();
+
+        let mut prover = KZGProver::<Bls12_381>::new(crs, domain.clone(), g1, true);
+
+        let mut rng = test_rng();
+        let blinding_scalars: Vec<Fr> = (0..11).map(|_| Fr::rand(&mut rng)).collect();
+
+        let proof = prover.generate_proof(circuit.clone(), &blinding_scalars);
+        let debug_info = prover.prover_debug_info.as_ref().unwrap();
+
+        let zeta = debug_info.zeta;
+        let v = debug_info.v;
+
+        // First, let's check if r(ζ) = 0
+        let r_at_zeta = debug_info.linearisation_poly.evaluate(&zeta);
+        println!("r(ζ) = {}", r_at_zeta);
+
+        // Check individual terms at ζ
+        let a_term_at_zeta = (debug_info.a_poly_blinded.evaluate(&zeta) - proof.a_bar) * v;
+        let b_term_at_zeta = (debug_info.b_poly_blinded.evaluate(&zeta) - proof.b_bar) * v.pow([2]);
+        let c_term_at_zeta = (debug_info.c_poly_blinded.evaluate(&zeta) - proof.c_bar) * v.pow([3]);
+
+        println!("a_term(ζ) = {}", a_term_at_zeta);
+        println!("b_term(ζ) = {}", b_term_at_zeta);
+        println!("c_term(ζ) = {}", c_term_at_zeta);
+
+        // These should all be zero!
+        assert!(
+            a_term_at_zeta.is_zero(),
+            "a_poly_blinded(ζ) should equal a_bar"
+        );
+        assert!(
+            b_term_at_zeta.is_zero(),
+            "b_poly_blinded(ζ) should equal b_bar"
+        );
+        assert!(
+            c_term_at_zeta.is_zero(),
+            "c_poly_blinded(ζ) should equal c_bar"
+        );
+
+        let sigma_maps = circuit.permutation.get_sigma_maps();
+        let sigma_polys = circuit
+            .permutation
+            .generate_sigma_polynomials(sigma_maps, &domain);
+
+        let sigma1_term_at_zeta = (sigma_polys.0.evaluate(&zeta) - proof.sigma_bar_1) * v.pow([4]);
+        let sigma2_term_at_zeta = (sigma_polys.1.evaluate(&zeta) - proof.sigma_bar_2) * v.pow([5]);
+
+        println!("sigma1_term(ζ) = {}", sigma1_term_at_zeta);
+        println!("sigma2_term(ζ) = {}", sigma2_term_at_zeta);
+
+        assert!(
+            sigma1_term_at_zeta.is_zero(),
+            "sigma1(ζ) should equal sigma_bar_1"
+        );
+        assert!(
+            sigma2_term_at_zeta.is_zero(),
+            "sigma2(ζ) should equal sigma_bar_2"
+        );
+
+        // Now check the total numerator
+        let numerator = debug_info.linearisation_poly.clone()
+            + debug_info
+                .a_poly_blinded
+                .clone()
+                .sub(&constant_polynomial(proof.a_bar))
+                .mul(v)
+            + debug_info
+                .b_poly_blinded
+                .clone()
+                .sub(&constant_polynomial(proof.b_bar))
+                .mul(v.pow([2]))
+            + debug_info
+                .c_poly_blinded
+                .clone()
+                .sub(&constant_polynomial(proof.c_bar))
+                .mul(v.pow([3]))
+            + sigma_polys
+                .0
+                .clone()
+                .sub(&constant_polynomial(proof.sigma_bar_1))
+                .mul(v.pow([4]))
+            + sigma_polys
+                .1
+                .clone()
+                .sub(&constant_polynomial(proof.sigma_bar_2))
+                .mul(v.pow([5]));
+
+        let numerator_at_zeta = numerator.evaluate(&zeta);
+        println!("Total numerator(ζ) = {}", numerator_at_zeta);
+
+        assert!(numerator_at_zeta.is_zero(), "Numerator should be zero at ζ");
+
+        // Only proceed with reconstruction if numerator is zero
+        let denominator = vec_to_poly(vec![-zeta, Fr::one()]);
+        let reconstructed_w_zeta = numerator.clone().div(&denominator);
+
+        assert_eq!(
+            debug_info.opening_poly, reconstructed_w_zeta,
+            "Reconstructed opening polynomial doesn't match computed one"
+        );
+    }
+
+    #[test]
+    fn test_opening_polynomial_omega() {
+        let circuit = dummy_circuit();
+        let (crs_g1, _, x) = dummy_crs_tau::<Bls12_381>(circuit.domain.len() + 5);
+        let g1 = G1Projective::generator().into_affine();
+        let mut rng = test_rng();
+
+        let mut prover =
+            KZGProver::<Bls12_381>::new(crs_g1.clone(), circuit.domain.clone(), g1, true);
+        let blinding_scalars: Vec<Fr> = (0..11).map(|_| Fr::rand(&mut rng)).collect();
+
+        let proof = prover.generate_proof(circuit.clone(), &blinding_scalars);
+        let debug_info = prover.prover_debug_info.as_ref().unwrap();
+
+        let zeta = debug_info.zeta;
+        let omega = circuit.domain[1];
+
+        // For W_ζω, test similar properties
+        let zeta_omega = zeta * omega;
+
+        // Reconstruct Z polynomial
+        let vanishing_poly = Circuit::vanishing_poly(&circuit.domain);
+        let rolling_product = circuit.permutation.get_rolling_product(
+            debug_info.gamma,
+            debug_info.beta,
+            &circuit.domain,
+        );
+        let z = KZGProver::<Bls12_381>::compute_permutation_polynomial(
+            blinding_scalars[6],
+            blinding_scalars[7],
+            blinding_scalars[8],
+            &vanishing_poly,
+            &rolling_product,
+        );
+
+        let numerator_omega = z.clone().sub(&constant_polynomial(proof.z_omega_bar));
+        assert!(
+            numerator_omega.evaluate(&zeta_omega).is_zero(),
+            "Omega numerator should be zero at ζω"
+        );
+
+        let denominator_omega = vec_to_poly(vec![-zeta_omega, Fr::one()]);
+        let reconstructed_opening_omega = numerator_omega.clone().div(&denominator_omega);
+        assert_eq!(
+            debug_info.opening_omega_poly, reconstructed_opening_omega,
+            "Opening omega polynomial division incorrect"
+        );
+
+        let opening_commitment =
+            KZGProver::<Bls12_381>::commit_polynomial(&reconstructed_opening_omega, &crs_g1, g1);
+        assert_eq!(opening_commitment, proof.w_zeta_omega);
+        assert_eq!(
+            g1 * reconstructed_opening_omega.evaluate(&x),
+            proof.w_zeta_omega
+        );
     }
 }
