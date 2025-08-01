@@ -146,7 +146,6 @@ pub fn verify_kzg_proof<E: Pairing>(
     lhs == rhs
 }
 
-
 pub fn compute_public_input_polynomial<E: Pairing>(
     public_inputs: &[E::ScalarField],
     domain: &[E::ScalarField],

@@ -757,7 +757,7 @@ impl<E: Pairing> KZGProver<E> {
         let mut acc = g1.into_group() * polynomial.coeffs[0]; // constant term
 
         for (i, coeff) in polynomial.coeffs.iter().skip(1).enumerate() {
-            acc += crs[i + 1].into_group() * coeff; 
+            acc += crs[i + 1].into_group() * coeff;
         }
 
         acc.into_affine()
