@@ -1,12 +1,13 @@
 use crate::circuit::{Circuit, SelectorPolynomials};
 use crate::fft::{compute_lagrange_base, constant_polynomial, vec_to_poly};
-use crate::transccript::hash_to_field;
 use ark_ec::pairing::Pairing;
 use ark_ec::{AffineRepr, CurveGroup};
-use ark_ff::{Field, One, Zero};
+use ark_ff::{Field, One, PrimeField, Zero};
 use ark_poly::univariate::{DenseOrSparsePolynomial, DensePolynomial};
 use ark_poly::{DenseUVPolynomial, Polynomial};
 use std::ops::{Add, Div, Mul, Sub};
+use ark_serialize::CanonicalSerialize;
+use sha2::{Digest, Sha256};
 
 /// A PLONK prover using KZG commitments.
 /// Handles constraint construction, permutation checks, quotient polynomial,
@@ -843,6 +844,21 @@ impl<E: Pairing> KZGProver<E> {
 
         acc.into_affine()
     }
+}
+
+pub fn hash_to_field<F: PrimeField>(label: &str, inputs: &[impl CanonicalSerialize]) -> F {
+    let mut hasher = Sha256::new();
+    hasher.update(label.as_bytes());
+
+    for input in inputs {
+        let mut buf = Vec::new();
+        input.serialize_compressed(&mut buf).unwrap();
+        hasher.update(&buf);
+    }
+
+    let hash_bytes = hasher.finalize();
+
+    F::from_be_bytes_mod_order(&hash_bytes)
 }
 
 #[cfg(test)]
