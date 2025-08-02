@@ -7,15 +7,17 @@ use ark_poly::{DenseUVPolynomial, Polynomial};
 use ark_std::iterable::Iterable;
 use itertools::izip;
 
+/// Encodes PLONK's copy-constraint system via a permutation argument
 #[derive(Clone)]
 pub struct Permutation<F: Field> {
     pub witness: Witness<F>,
-    pub wiring: Vec<Vec<usize>>,
+    pub wiring: Vec<Vec<usize>>, // groups of positions that must be equal
     pub k1: F,
     pub k2: F,
 }
 
 impl<F: Field> Permutation<F> {
+    /// Creates a new permutation with copy constraints and coset shifts
     pub fn new(witness: Witness<F>, wiring: Vec<Vec<usize>>, k1: F, k2: F) -> Permutation<F> {
         Self {
             witness,
@@ -25,6 +27,7 @@ impl<F: Field> Permutation<F> {
         }
     }
 
+    /// Generates a flattened σ(i) mapping (from witness indices to permuted ones)
     pub fn generate_sigma_mapping(&self) -> Vec<usize> {
         let n = self.witness.a.len();
         let mut sigma_map: Vec<_> = (0..3 * n).collect();
@@ -42,6 +45,7 @@ impl<F: Field> Permutation<F> {
         sigma_map
     }
 
+    /// Splits σ(i) map into per-wire group (a, b, c)
     pub fn get_sigma_maps(&self) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
         let sigma = self.generate_sigma_mapping();
         let n = self.witness.a.len();
@@ -52,6 +56,7 @@ impl<F: Field> Permutation<F> {
         (a_sigma, b_sigma, c_sigma)
     }
 
+    /// Generates σ polynomials by evaluating σ(i) over extended domain h ∪ k1·h ∪ k2·h
     pub fn generate_sigma_polynomials(
         &self,
         mappings: (Vec<usize>, Vec<usize>, Vec<usize>),
@@ -77,8 +82,8 @@ impl<F: Field> Permutation<F> {
         (a_sigma, b_sigma, c_sigma)
     }
 
-    // Calculates rolling product and outputs interpolation with
-    // [Z0,..., Zn-1] values.
+    /// Calculates rolling product and outputs interpolation with
+    /// [Z0,..., Zn-1] values.
     pub fn calculate_rolling_product(
         &self,
         sigma_polys: (DensePolynomial<F>, DensePolynomial<F>, DensePolynomial<F>),
@@ -114,7 +119,7 @@ impl<F: Field> Permutation<F> {
         vec_to_poly(inverse_fft(&z_evaluations, omega))
     }
 
-    // convenience function producing rolling product
+    /// Convenience method: returns Z(X) from domain and β, γ
     pub fn get_rolling_product(&self, gamma: F, beta: F, domain: &[F]) -> DensePolynomial<F> {
         let sigma_maps = self.get_sigma_maps();
         let sigma_polys = self.generate_sigma_polynomials(sigma_maps.clone(), domain);
@@ -122,6 +127,7 @@ impl<F: Field> Permutation<F> {
     }
 }
 
+/// Verifies the recurrence for Z(X) and final Z(w^n) = 1 in cleartext
 pub fn verify_permutation_argument<F: Field>(
     domain: &[F],
     z_evals: &[F],
