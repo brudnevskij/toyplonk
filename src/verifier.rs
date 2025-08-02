@@ -51,15 +51,15 @@ impl<E: Pairing> Challenges<E> {
 }
 
 pub struct VerifierPreprocessedInput<E: Pairing> {
-    q_m: E::G1Affine,
-    q_l: E::G1Affine,
-    q_r: E::G1Affine,
-    q_o: E::G1Affine,
-    q_c: E::G1Affine,
-    sigma_1: E::G1Affine,
-    sigma_2: E::G1Affine,
-    sigma_3: E::G1Affine,
-    x: E::G2Affine,
+    pub q_m: E::G1Affine,
+    pub q_l: E::G1Affine,
+    pub q_r: E::G1Affine,
+    pub q_o: E::G1Affine,
+    pub q_c: E::G1Affine,
+    pub sigma_1: E::G1Affine,
+    pub sigma_2: E::G1Affine,
+    pub sigma_3: E::G1Affine,
+    pub x: E::G2Affine,
 }
 
 pub fn verify_kzg_proof<E: Pairing>(
@@ -399,28 +399,16 @@ mod test {
         let mut prover =
             KZGProver::<Bls12_381>::new(crs_g1.clone(), circuit.domain.clone(), g1, true);
 
-        // Generate blinding scalars (11 required as per the assertion in generate_proof)
-        let mut rng = ark_std::test_rng();
+        let mut rng = test_rng();
         let blinding_scalars: Vec<Fr> = (0..11).map(|_| Fr::rand(&mut rng)).collect();
 
         let proof = prover.generate_proof(circuit.clone(), &blinding_scalars);
-        //println!("{:?}", proof);
-
-        let ch = Challenges::new(&proof);
-        println!("alpha: {}", ch.alpha);
-        println!("beta: {}", ch.beta);
-        println!("gamma: {}", ch.gamma);
-        println!("v: {}", ch.v);
-        println!("zeta: {}", ch.zeta);
 
         let selector_polys = circuit.get_selector_polynomials();
         let sigma_maps = circuit.permutation.get_sigma_maps();
         let sigma_polys = circuit
             .permutation
             .generate_sigma_polynomials(sigma_maps, &circuit.domain);
-
-        let debug = prover.prover_debug_info.unwrap();
-
         let preprocessed_input = &VerifierPreprocessedInput {
             q_m: KZGProver::<Bls12_381>::commit_polynomial(&selector_polys.q_m, &crs_g1, g1),
             q_l: KZGProver::<Bls12_381>::commit_polynomial(&selector_polys.q_l, &crs_g1, g1),
