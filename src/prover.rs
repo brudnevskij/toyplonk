@@ -8,6 +8,9 @@ use ark_poly::univariate::{DenseOrSparsePolynomial, DensePolynomial};
 use ark_poly::{DenseUVPolynomial, Polynomial};
 use std::ops::{Add, Div, Mul, Sub};
 
+/// A PLONK prover using KZG commitments.
+/// Handles constraint construction, permutation checks, quotient polynomial,
+/// Fiat–Shamir challenge generation, and opening proof construction.
 pub struct KZGProver<E: Pairing> {
     pub crs: Vec<E::G1Affine>,
     pub domain: Vec<E::ScalarField>,
@@ -16,6 +19,8 @@ pub struct KZGProver<E: Pairing> {
     pub prover_debug_info: Option<ProverDebugInfo<E>>,
 }
 
+/// Central proof structure output by the prover.
+/// Contains all commitments and evaluation values needed by the verifier.
 #[derive(Clone, Debug)]
 pub struct Proof<E: Pairing> {
     pub a: E::G1Affine,
@@ -35,6 +40,7 @@ pub struct Proof<E: Pairing> {
     pub z_omega_bar: E::ScalarField,
 }
 
+/// Debug information to inspect prover internals during execution.
 #[derive(Debug, Clone)]
 pub struct ProverDebugInfo<E: Pairing> {
     pub linearisation_poly: DensePolynomial<E::ScalarField>,
@@ -90,6 +96,9 @@ impl<E: Pairing> KZGProver<E> {
             prover_debug_info: None,
         }
     }
+
+    /// Generate a PLONK proof using the circuit and witness.
+    /// This is the main function responsible for performing all 5 rounds.
     pub fn generate_proof(
         &mut self,
         circuit: Circuit<E::ScalarField>,
@@ -103,11 +112,11 @@ impl<E: Pairing> KZGProver<E> {
         let vanishing_poly = Circuit::vanishing_poly(&self.domain);
         let witness_polynomial = circuit.get_witness_polynomials();
 
+        // === Round 1: Commit to blinded wire polynomials ===
         let a = witness_polynomial.a.clone();
         let b = witness_polynomial.b.clone();
         let c = witness_polynomial.c.clone();
 
-        // round one, computing wire polynomials
         let a_poly = Self::compute_wire_coefficients_form(
             blinding_scalars[0],
             blinding_scalars[1],
@@ -135,7 +144,7 @@ impl<E: Pairing> KZGProver<E> {
         let c_commitment = Self::commit_polynomial(&c_poly, &self.crs, self.g1);
         commitment_buffer.push(c_commitment);
 
-        // round two, computing permutation poly
+        // === Round 2: Compute permutation product and commit to Z ===V
         let beta = hash_to_field("beta", &commitment_buffer);
         let gamma = hash_to_field("gamma", &commitment_buffer);
         let rolling_product = circuit
@@ -152,7 +161,7 @@ impl<E: Pairing> KZGProver<E> {
         let z_commitment = Self::commit_polynomial(&z, &self.crs, self.g1);
         commitment_buffer.push(z_commitment);
 
-        // round three, computing quotient polynomial
+        // === Round 3: Compute quotient polynomial and split into parts ===
         // first summand
         let public_input_poly = circuit.compute_public_input_polynomial();
         let selector_polynomials = circuit.get_selector_polynomials();
@@ -207,7 +216,7 @@ impl<E: Pairing> KZGProver<E> {
         commitment_buffer.push(t_mid_commitment);
         commitment_buffer.push(t_hi_commitment);
 
-        // round 4
+        // === Round 4: Evaluate wires and sigmas at ζ ===
         let zeta = hash_to_field("zeta", &commitment_buffer);
 
         let a_bar = a_poly.evaluate(&zeta);
@@ -219,7 +228,7 @@ impl<E: Pairing> KZGProver<E> {
 
         let z_omega_bar = z.evaluate(&(zeta * self.domain[1]));
 
-        // round 5
+        // === Round 5: Construct linearization poly and opening proofs ===
         // previous round's output could be added to transcript
         // however, I will just add v for now.
         let v = hash_to_field("v", &commitment_buffer);
@@ -328,6 +337,11 @@ impl<E: Pairing> KZGProver<E> {
         }
     }
 
+    /// Constructs the arithmetic constraint polynomial part of the quotient
+    ///
+    /// Form: q_M·a·b + q_L·a + q_R·b + q_O·c + q_C + PI(X)
+    ///
+    /// The sum is then divided by the vanishing polynomial Z_H(X)
     fn compute_constraint_summand(
         &self,
         blinded_a: &DensePolynomial<E::ScalarField>,
@@ -363,6 +377,9 @@ impl<E: Pairing> KZGProver<E> {
         );
         constraint_summand
     }
+
+    /// Evaluate all components at ζ and bundle them into an opening proof.
+    /// This is a batch opening at the evaluation point.
     fn compute_opening_proof_polynomial(
         &self,
         v: E::ScalarField,
@@ -391,6 +408,7 @@ impl<E: Pairing> KZGProver<E> {
         .div(&vec_to_poly(vec![-zeta, E::ScalarField::one()]))
     }
 
+    /// Evaluate Z at ζw and bundle it into an opening proof.
     fn compute_opening_proof_polynomial_omega(
         &self,
         omega: E::ScalarField,
@@ -398,10 +416,18 @@ impl<E: Pairing> KZGProver<E> {
         z_omega_bar: E::ScalarField,
         z: &DensePolynomial<E::ScalarField>,
     ) -> DensePolynomial<E::ScalarField> {
+        // (z(x) - z(ζ)) / X - ζw
         (z - &constant_polynomial(z_omega_bar))
             .div(&vec_to_poly(vec![-zeta * omega, E::ScalarField::one()]))
     }
 
+    /// Constructs the linearization polynomial `r(X)`
+    ///
+    /// This polynomial combines all constraint evaluations at ζ (zeta), including:
+    /// - Gate constraints (q_L · ā + q_R · b̄ + q_M · āb̄ + ...)
+    /// - Permutation constraints (Z(X) and σ terms)
+    /// - Initialization constraint at L₁(ζ)
+    /// - Quotient polynomial evaluation at ζ multiplied by vanishing polynomial
     pub fn compute_linearisation_polynomial(
         &self,
         a_bar: E::ScalarField,
@@ -468,6 +494,10 @@ impl<E: Pairing> KZGProver<E> {
             .sub(&quotient_summand)
     }
 
+    /// Reconstructs t(ζ) * Z_H(ζ), where t = t_lo + ζⁿ t_mid + ζ²ⁿ t_hi
+    ///
+    /// This term is subtracted in the linearization polynomial to enforce
+    /// that the quotient polynomial reconstruction is valid.
     pub fn compute_quotient_linearization_summand(
         &self,
         n: usize,
@@ -483,6 +513,11 @@ impl<E: Pairing> KZGProver<E> {
 
         (t_lo.clone() + t_mid.mul(zeta_n) + t_hi.mul(zeta_2n)).mul(vanishing_z)
     }
+
+    /// Computes the initialization term `α² · (Z(ζ) - 1) · L₁(ζ)`
+    ///
+    /// Enforces that the permutation product polynomial Z(X)
+    /// starts with value 1 at the first position (i.e., Z(ω⁰) = 1)
     pub fn compute_init_z_linearization_summand(
         &self,
         alpha: E::ScalarField,
@@ -499,6 +534,14 @@ impl<E: Pairing> KZGProver<E> {
             .mul(alpha.square())
     }
 
+    /// Constructs the permutation argument part of the linearization polynomial.
+    ///
+    ///   α · [Z(ζ) · Π(lhs terms) − Z(ζ·ω) · Π(rhs terms)]
+    ///
+    /// lhs = (ā + β·ζ + γ)(b̄ + β·k₁·ζ + γ)(c̄ + β·k₂·ζ + γ)  
+    /// rhs = (ā + β·σ₁(ζ) + γ)(b̄ + β·σ₂(ζ) + γ)(c̄ + β·σ₃(ζ) + γ)
+    ///
+    /// This linear term is included in the batched polynomial opening proof at ζ.
     pub fn compute_permutation_linearization_summand(
         &self,
         a_bar: E::ScalarField,
@@ -533,6 +576,9 @@ impl<E: Pairing> KZGProver<E> {
         (permut_summand_1.sub(&permut_summand_2)).mul(alpha)
     }
 
+    /// Evaluates arithmetic gate constraints at ζ
+    ///
+    /// r_gate(ζ) = q_L(ζ) · ā + q_R(ζ) · b̄ + q_M(ζ) · ā·b̄ + q_O(ζ) · c̄ + q_C(ζ) + PI(ζ)
     pub fn compute_constraint_linearisation_summand(
         &self,
         a_bar: E::ScalarField,
@@ -558,6 +604,15 @@ impl<E: Pairing> KZGProver<E> {
         m_term + r_term + l_term + o_term + q_c.clone() + pi_eval
     }
 
+    /// Constructs the permutation part of the quotient polynomial
+    ///
+    /// Enforces that the copy constraints hold via the grand product argument.
+    /// Form: α · (Z(X) · Π(lhs) - Z(ωX) · Π(rhs)) / Z_H(X)
+    ///
+    /// lhs = (a(X)+β·X+γ)(b(X)+β·k₁X+γ)(c(X)+β·k₂X+γ)  
+    /// rhs = (a(X)+β·σ₁(X)+γ)(b(X)+β·σ₂(X)+γ)(c(X)+β·σ₃(X)+γ)
+    ///
+    /// The result must be divisible by the vanishing polynomial `Z_H(X)`
     fn compute_permutation_summand(
         &self,
         a: &DensePolynomial<E::ScalarField>,
@@ -611,6 +666,10 @@ impl<E: Pairing> KZGProver<E> {
         permutation_summand
     }
 
+    /// Constructs the left-hand side of the permutation argument:
+    /// Z(X) · Π (wire_i(X) + β·s + γ)
+    ///
+    /// where s ∈ {X, k₁·X, k₂·X}
     fn compute_first_permutation_summand(
         &self,
         a: DensePolynomial<E::ScalarField>,
@@ -632,6 +691,10 @@ impl<E: Pairing> KZGProver<E> {
             .naive_mul(&z)
     }
 
+    /// Constructs the right-hand side of the permutation argument:
+    /// Z(ω·X) · Π (wire_i(X) + β·σ_i(X) + γ)
+    ///
+    /// Uses σ₁(X), σ₂(X), σ₃(X) and evaluates Z at ω·X
     fn compute_second_permutation_summand(
         &self,
         a: DensePolynomial<E::ScalarField>,
@@ -665,6 +728,11 @@ impl<E: Pairing> KZGProver<E> {
             .naive_mul(&shifted_z)
     }
 
+    /// Enforces Z(1) = 1 by constraining the Lagrange base polynomial L₁
+    ///
+    /// Computes α² · (Z(X) - 1) · L₁(X) / Z_H(X)
+    ///
+    /// Ensures Z starts correctly in the grand product construction
     fn compute_init_z_summand(
         &self,
         alpha: E::ScalarField,
@@ -685,6 +753,8 @@ impl<E: Pairing> KZGProver<E> {
         last_summand
     }
 
+    /// Split t(X) into t_lo + X^n · t_mid + X^{2n} · t_hi
+    /// to allow commitment using a trusted setup with degree < 3n.
     fn split_quotient_polynomial(
         t: &DensePolynomial<E::ScalarField>,
         b10: E::ScalarField,
@@ -724,6 +794,10 @@ impl<E: Pairing> KZGProver<E> {
         (t_lo, t_mid, t_hi)
     }
 
+    /// Constructs the permutation polynomial Z(X) = blinding(X) + rolling_product(X)
+    ///
+    /// Blinding hides the structure and ensures zero-knowledge.  
+    /// Rolling product encodes the grand product argument.
     fn compute_permutation_polynomial(
         b7: E::ScalarField,
         b8: E::ScalarField,
@@ -736,6 +810,11 @@ impl<E: Pairing> KZGProver<E> {
         blinding_poly + rolling_product.clone()
     }
 
+    /// Blinds a witness polynomial and returns its coefficient form
+    ///
+    /// Form: a(X) = witness(X) + b₁·X + b₂·X² multiplied by the vanishing polynomial
+    ///
+    /// This is to ensure hiding and independence of wire polynomials in KZG
     fn compute_wire_coefficients_form(
         b1: E::ScalarField,
         b2: E::ScalarField,
@@ -746,6 +825,8 @@ impl<E: Pairing> KZGProver<E> {
         blinding_poly + witness.clone()
     }
 
+    /// Commit to a polynomial using CRS powers of τ in G1.
+    /// This performs a KZG commitment.
     pub fn commit_polynomial(
         polynomial: &DensePolynomial<E::ScalarField>,
         crs: &[E::G1Affine],
