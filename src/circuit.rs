@@ -7,6 +7,7 @@ use ark_poly::DenseUVPolynomial;
 use ark_poly::univariate::DensePolynomial;
 use itertools::Itertools;
 
+/// A PLONK circuit containing gates, witness, public inputs, domain, and permutation
 #[derive(Clone)]
 pub struct Circuit<F: Field> {
     pub gates: Vec<Gate<F>>,
@@ -16,6 +17,7 @@ pub struct Circuit<F: Field> {
     pub permutation: Permutation<F>,
 }
 
+/// Interpolated selector polynomials (q_L, q_R, q_M, q_O, q_C)
 #[derive(Clone, Debug)]
 pub struct SelectorPolynomials<F: Field> {
     pub q_l: DensePolynomial<F>,
@@ -25,6 +27,7 @@ pub struct SelectorPolynomials<F: Field> {
     pub q_c: DensePolynomial<F>,
 }
 
+/// Interpolated witness polynomials A(X), B(X), C(X)
 #[derive(Clone, Debug)]
 pub struct WitnessPolynomials<F: Field> {
     pub a: DensePolynomial<F>,
@@ -33,6 +36,7 @@ pub struct WitnessPolynomials<F: Field> {
 }
 
 impl<F: Field> Circuit<F> {
+    /// Constructs a new Circuit with gates, witness, and permutation wiring
     pub fn new(
         gates: Vec<Gate<F>>,
         witness: Witness<F>,
@@ -79,6 +83,7 @@ impl<F: Field> Circuit<F> {
         }
     }
 
+    /// Interpolates witness wires A, B, C into DensePolynomials
     pub fn get_witness_polynomials(&self) -> WitnessPolynomials<F> {
         let omega = self.domain[1];
         WitnessPolynomials {
@@ -90,7 +95,7 @@ impl<F: Field> Circuit<F> {
 
     /// Checks if the constraint polynomial
     /// P(X) = QL(X)A(X) + QR(X)B(X) + QM(X)A(X)B(X) + QO(X)C(X) + QC(X)
-    /// vanishes over evaluation domain H using pointwise operations
+    /// vanishes over evaluation domain H using point-wise operations
     pub fn is_gate_constraint_polynomial_zero_over_h(
         &self,
         selector: &SelectorPolynomials<F>,
@@ -136,6 +141,7 @@ impl<F: Field> Circuit<F> {
         constraint_poly.iter().all(|x| x.is_zero())
     }
 
+    /// Builds the full gate constraint polynomial symbolically
     pub fn generate_gate_constraint_polynomial(
         &self,
         selector: &SelectorPolynomials<F>,
@@ -160,6 +166,7 @@ impl<F: Field> Circuit<F> {
         term_l + term_r + term_m + term_o + q_c.clone() + public_input
     }
 
+    /// Shorthand for computing the constraint polynomial directly
     pub fn get_gate_constraint_polynomial(&self) -> DensePolynomial<F> {
         self.generate_gate_constraint_polynomial(
             &self.get_selector_polynomials(),
@@ -168,6 +175,7 @@ impl<F: Field> Circuit<F> {
         )
     }
 
+    /// Constructs vanishing polynomial Z_H(X) = (X - ω^i)
     pub fn vanishing_poly(domain: &[F]) -> DensePolynomial<F> {
         let mut zh = DensePolynomial::from_coefficients_slice(&[F::one()]);
         for &root in domain {
@@ -177,7 +185,7 @@ impl<F: Field> Circuit<F> {
         zh
     }
 
-    // Computes PI(x), pads evaluations with 0 for ifft
+    /// Computes public input polynomial PI(X), where PI(ζ) = -Σ PIᵢ·Lᵢ(ζ)
     pub fn compute_public_input_polynomial(&self) -> DensePolynomial<F> {
         let mut evaluations = vec![F::zero(); self.domain.len()];
         for (i, &x) in self.public_inputs.iter().enumerate() {
