@@ -10,6 +10,7 @@ use ark_poly::Polynomial;
 use ark_poly::univariate::DensePolynomial;
 use std::ops::Mul;
 
+/// Holds all Fiat-Shamir challenges used in verification
 #[derive(Debug, Clone)]
 struct Challenges<E: Pairing> {
     alpha: E::ScalarField,
@@ -21,6 +22,7 @@ struct Challenges<E: Pairing> {
 }
 
 impl<E: Pairing> Challenges<E> {
+    /// Derives Fiat–Shamir challenges from proof commitments
     pub fn new(proof: &Proof<E>) -> Self {
         let mut commitment_buffer = vec![proof.a, proof.b, proof.c];
         let beta = hash_to_field("beta", &commitment_buffer);
@@ -50,6 +52,7 @@ impl<E: Pairing> Challenges<E> {
     }
 }
 
+/// Contains verifier's preprocessed commitments
 pub struct VerifierPreprocessedInput<E: Pairing> {
     pub q_m: E::G1Affine,
     pub q_l: E::G1Affine,
@@ -62,6 +65,8 @@ pub struct VerifierPreprocessedInput<E: Pairing> {
     pub x: E::G2Affine,
 }
 
+/// Verifies a PLONK proof using KZG commitments
+/// all steps according to paper
 pub fn verify_kzg_proof<E: Pairing>(
     proof: &Proof<E>,
     preprocessed_input: &VerifierPreprocessedInput<E>,
@@ -72,9 +77,9 @@ pub fn verify_kzg_proof<E: Pairing>(
     g1: E::G1Affine,
     g2: E::G2Affine,
 ) -> bool {
-    // 1-3. validate commitments are in the group
+    // === Steps 1-3: Validation ===
 
-    // 4. challenges
+    // === Step 4: Computing challenges ===
     let Challenges {
         alpha,
         beta,
@@ -84,18 +89,18 @@ pub fn verify_kzg_proof<E: Pairing>(
         u,
     } = Challenges::new(proof);
 
-    // 5. zero polynomial eval
+    // === Step 5: Zero polynomial evaluation ===
     let vanishing_polynomial = Circuit::vanishing_poly(domain);
     let vanishing_eval = vanishing_polynomial.evaluate(&zeta);
 
-    // 6. Lagrange poly eval
+    // === Step 6: Lagrange poly evaluation ===
     let lagrange_poly_eval = compute_lagrange_base(1, &domain).evaluate(&zeta);
 
-    // 7. PI evaluation
+    // === Step 7: PI evaluation ===
     let pi = compute_public_input_polynomial::<E>(public_input, domain);
     let pi_eval = pi.evaluate(&zeta);
 
-    // 8. compute constant part of r(X)
+    // === Step 8: Compute constant part of r(X) ===
     let r0 = compute_r_constant_terms::<E>(
         pi_eval,
         lagrange_poly_eval,
@@ -110,7 +115,7 @@ pub fn verify_kzg_proof<E: Pairing>(
         proof.z_omega_bar,
     );
 
-    // 9. compute first part of batched PC
+    // === Step 9: Compute first part of batched PC ===
     let first_part_commitment = compute_first_part_of_batched_poly(
         domain.len(),
         k1,
@@ -121,7 +126,7 @@ pub fn verify_kzg_proof<E: Pairing>(
         preprocessed_input,
     );
 
-    // 10. full batched PC
+    // === Step 10: Full batched PC ===
     let full_batch_commitment = compute_full_batched_polynomial_commitment::<E>(
         v,
         first_part_commitment,
@@ -132,11 +137,11 @@ pub fn verify_kzg_proof<E: Pairing>(
         preprocessed_input.sigma_2,
     );
 
-    // 11. group encoded batch evaluations
+    // Step 11: Group encoded batch evaluations ===
     let group_encoded_batch_evals =
         compute_group_encoded_batch_evaluations(r0, v, u, proof.z_omega_bar, proof, g1);
 
-    // 12. batch validation
+    // === Step 12: Batch validation ===
     let lhs = E::pairing(proof.w_zeta + proof.w_zeta_omega * u, preprocessed_input.x);
     let rhs = E::pairing(
         proof.w_zeta * zeta + proof.w_zeta_omega * u * zeta * domain[1] + full_batch_commitment
@@ -146,6 +151,7 @@ pub fn verify_kzg_proof<E: Pairing>(
     lhs == rhs
 }
 
+/// Constructs PI(X) such that PI(ζ) = -Σ public_inputs[i]·L_i(ζ)
 pub fn compute_public_input_polynomial<E: Pairing>(
     public_inputs: &[E::ScalarField],
     domain: &[E::ScalarField],
@@ -158,6 +164,7 @@ pub fn compute_public_input_polynomial<E: Pairing>(
     vec_to_poly(inverse_fft(&evaluations, domain[1]))
 }
 
+/// Computes constant terms in the linearization polynomial r(ζ)
 fn compute_r_constant_terms<E: Pairing>(
     pi: E::ScalarField,
     lagrange_eval: E::ScalarField,
@@ -180,6 +187,7 @@ fn compute_r_constant_terms<E: Pairing>(
     pi - lagrange_summand - permut_summand
 }
 
+/// Computes d = sum of all commitments weighted by evals and α
 fn compute_first_part_of_batched_poly<E: Pairing>(
     n: usize,
     k1: E::ScalarField,
@@ -247,6 +255,7 @@ fn compute_first_part_of_batched_poly<E: Pairing>(
         .into()
 }
 
+/// Constructs full batched polynomial commitment using v powers
 fn compute_full_batched_polynomial_commitment<E: Pairing>(
     v: E::ScalarField,
     d: E::G1Affine,
@@ -266,6 +275,7 @@ fn compute_full_batched_polynomial_commitment<E: Pairing>(
         .into()
 }
 
+/// Encodes all evaluations into a G1 element for pairing check
 fn compute_group_encoded_batch_evaluations<E: Pairing>(
     r0: E::ScalarField,
     v: E::ScalarField,
