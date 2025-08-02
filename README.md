@@ -1,44 +1,60 @@
-
 # 🔒 toyplonk
 
-A minimal, educational implementation of the [PLONK](https://eprint.iacr.org/2019/953) zero-knowledge proving system built from scratch in Rust.
+A minimal and educational implementation of the [PLONK](https://eprint.iacr.org/2019/953) zero-knowledge proving system written from scratch in Rust.
 
-This project is designed to help understand how modern zk-SNARKs like PLONK work by implementing them step by step, starting from constraint systems all the way to proof generation and verification.
+This project is designed for learning and exploring the internals of zk-SNARKs like PLONK, focusing on clarity, correctness, and a hands-on understanding of polynomial-based proof systems.
 
 ---
 
 ## 🧱 Components
 
-| Module                 | Description                                                  |
-|------------------------|--------------------------------------------------------------|
-| `constraint_system.rs` | Gate definitions, wire selectors, and arithmetic constraints |
-| `circuit.rs`           | Circuit construction and witness assignment                  |
-| `permutation.rs`       | Implements the copy-constraint permutation argument          |
-| `fft.rs`               | Cooley–Tukey FFT and inverse FFT for evaluation domains      |
-| `commitment.rs`        | Polynomial commitment scheme (planned: KZG via `arkworks`)   |
-| `prover.rs`            | Proof generation logic (PLONK-style arithmetization)         |
-| `verifier.rs`          | Proof verification logic                                     |
-| `tests/`               | Unit and integration tests for all components                |
+| Module          | Description                      |
+|------------------|----------------------------------|
+| `circuit.rs`     | Circuit definition, selector polynomials, public inputs, witness wires |
+| `gate.rs`        | Gate types (addition, multiplication, public input) and interface logic |
+| `permutation.rs` | Copy constraints via permutation argument and σ-polynomials |
+| `fft.rs`         | Cooley–Tukey FFT and IFFT for domain interpolation and evaluation |
+| `prover.rs`      | Implements the prover side of PLONK: quotient poly, linearization, etc. |
+| `verifier.rs`    | Verifies PLONK proofs using KZG commitments and pairing checks |
+| `witness.rs`     | Stores witness wire values for each gate |
+| `transccript.rs` | Fiat–Shamir heuristic            |
+| `main.rs`        | A full example: builds and proves a non-trivial arithmetic circuit |
 
 ---
 
-## 🔍 Scope & Focus
+## ✨ Example Circuit
 
-This is a **toy project**, focused on:
-- Learning and understanding ZK proving systems
-- Learning `arkworks` ecosystem
-- Keeping code readable and educational
+The main function proves knowledge of private inputs satisfying:
 
-**Not** focused on:
-- Performance
-- Production cryptographic security
-- General-purpose circuits or universality
+```
+c = ab + a + b + (a + b)^2
+```
+
+for public inputs `a = 2`, `b = 3`, `c = 36`, over 8 gates, including 3 public input gates.  
+The full proof is generated and successfully verified using KZG commitments over BLS12-381.
 
 ---
 
-## 🧪 Current Status
+## 🎯 Goals
 
-- ✅ FFT & IFFT tested and working
-- ⏳ Permutation argument in progress
-- ⏳ Gate constraint evaluation
-- ⏳ Proof construction and verification
+This project is:
+
+✅ **Educational** - built for learning PLONK internals, not for speed  
+✅ **Minimal** - fewer abstractions, clearer math  
+✅ **Hands-on** - full pipeline: build circuit → generate proof → verify it
+
+Not intended for:
+
+❌ Production use  
+❌ Generic circuit support or universality  
+❌ High performance or prover speed
+
+---
+
+## ✅ Status
+
+- ✅ Fully working PLONK prover & verifier
+- ✅ KZG polynomial commitment scheme via `arkworks`
+- ✅ Public input encoding and gate arithmetization
+- ✅ FFT and inverse FFT implemented and tested
+- ✅ Full example in `main.rs`
