@@ -1,4 +1,4 @@
-use crate::circuit::{Circuit, SelectorPolynomials, WitnessPolynomials};
+use crate::circuit::{Circuit, SelectorPolynomials};
 use crate::fft::{compute_lagrange_base, constant_polynomial, vec_to_poly};
 use crate::transccript::hash_to_field;
 use ark_ec::pairing::Pairing;
@@ -848,9 +848,9 @@ impl<E: Pairing> KZGProver<E> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::circuit::Witness;
     use crate::gate::Gate;
     use crate::permutation::Permutation;
-    use crate::witness::Witness;
     use ark_bls12_381::{Bls12_381, Fr, G1Affine, G1Projective, G2Projective};
     use ark_ec::Group;
     use ark_ff::{FftField, Field, One};

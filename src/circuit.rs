@@ -1,11 +1,9 @@
 use crate::fft::{fft, inverse_fft, pad_with_zeroes, vec_to_poly};
 use crate::gate::Gate;
 use crate::permutation::Permutation;
-use crate::witness::Witness;
 use ark_ff::Field;
 use ark_poly::DenseUVPolynomial;
 use ark_poly::univariate::DensePolynomial;
-use itertools::Itertools;
 
 /// A PLONK circuit containing gates, witness, public inputs, domain, and permutation
 #[derive(Clone)]
@@ -15,6 +13,14 @@ pub struct Circuit<F: Field> {
     pub public_inputs: Vec<F>,
     pub domain: Vec<F>,
     pub permutation: Permutation<F>,
+}
+
+/// Witnesses A,B,C
+#[derive(Clone, Debug)]
+pub struct Witness<F: Field> {
+    pub a: Vec<F>,
+    pub b: Vec<F>,
+    pub c: Vec<F>,
 }
 
 /// Interpolated selector polynomials (q_L, q_R, q_M, q_O, q_C)
@@ -198,9 +204,8 @@ impl<F: Field> Circuit<F> {
 
 #[cfg(test)]
 mod tests {
-    use crate::circuit::Circuit;
+    use crate::circuit::{Circuit, Witness};
     use crate::gate::Gate;
-    use crate::witness::Witness;
     use ark_bls12_381::Fr;
     use ark_ff::{FftField, Field, Zero};
     use ark_poly::univariate::DenseOrSparsePolynomial;

@@ -3,9 +3,8 @@ use crate::fft::{compute_lagrange_base, inverse_fft, vec_to_poly};
 use crate::prover::Proof;
 use crate::transccript::hash_to_field;
 use ark_ec::AffineRepr;
-use ark_ec::bn::G1Affine;
 use ark_ec::pairing::Pairing;
-use ark_ff::{Field, One, Zero};
+use ark_ff::{Field, Zero};
 use ark_poly::Polynomial;
 use ark_poly::univariate::DensePolynomial;
 use std::ops::Mul;
@@ -305,7 +304,7 @@ fn compute_group_encoded_batch_evaluations<E: Pairing>(
 
 #[cfg(test)]
 mod test {
-    use crate::circuit::{Circuit, SelectorPolynomials};
+    use crate::circuit::{Circuit, SelectorPolynomials, Witness};
     use crate::fft::{compute_lagrange_base, constant_polynomial};
     use crate::gate::Gate;
     use crate::prover::KZGProver;
@@ -314,7 +313,6 @@ mod test {
         compute_full_batched_polynomial_commitment, compute_group_encoded_batch_evaluations,
         compute_public_input_polynomial, compute_r_constant_terms, verify_kzg_proof,
     };
-    use crate::witness::Witness;
     use ark_bls12_381::{Bls12_381, Fr, G1Projective, G2Projective};
     use ark_ec::pairing::Pairing;
     use ark_ec::{AffineRepr, CurveGroup, Group};

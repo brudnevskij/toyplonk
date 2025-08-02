@@ -1,11 +1,10 @@
-use crate::fft::{fft, inverse_fft, vec_to_poly};
-use crate::witness::Witness;
-use ark_bls12_381::Fr;
+use crate::circuit::Witness;
+use crate::fft::inverse_fft;
+use crate::fft::vec_to_poly;
 use ark_ff::Field;
-use ark_poly::univariate::{DenseOrSparsePolynomial, DensePolynomial};
-use ark_poly::{DenseUVPolynomial, Polynomial};
+use ark_poly::Polynomial;
+use ark_poly::univariate::DensePolynomial;
 use ark_std::iterable::Iterable;
-use itertools::izip;
 
 /// Encodes PLONK's copy-constraint system via a permutation argument
 #[derive(Clone)]
@@ -195,6 +194,7 @@ pub fn verify_permutation_argument<F: Field>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fft::fft;
     use ark_bls12_381::Fr;
     use ark_ff::{FftField, One};
 

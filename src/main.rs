@@ -1,8 +1,7 @@
-use crate::circuit::Circuit;
+use crate::circuit::{Circuit, Witness};
 use crate::gate::Gate;
 use crate::prover::KZGProver;
 use crate::verifier::{VerifierPreprocessedInput, verify_kzg_proof};
-use crate::witness::Witness;
 use ark_bls12_381::{Bls12_381, Fr, G1Projective, G2Projective};
 use ark_ec::pairing::Pairing;
 use ark_ec::{CurveGroup, Group};
@@ -16,7 +15,6 @@ mod permutation;
 mod prover;
 mod transccript;
 mod verifier;
-mod witness;
 
 fn fr(n: u64) -> Fr {
     Fr::from(n)
