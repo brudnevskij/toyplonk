@@ -50,6 +50,16 @@ impl<F: Field> Gate<F> {
         Self::mul_gate(F::one(), F::one())
     }
 
+    pub fn public_input_gate(input_coefficient: F) -> Gate<F> {
+        Self {
+            q_l: input_coefficient,
+            q_r: F::zero(),
+            q_m: F::zero(),
+            q_o: F::zero(),
+            q_c: F::zero(),
+        }
+    }
+
     pub fn is_satisfied(&self, a: F, b: F, c: F) -> bool {
         let res = self.q_l * a + self.q_r * b + self.q_m * a * b + self.q_o * c + self.q_c;
         res.is_zero()
