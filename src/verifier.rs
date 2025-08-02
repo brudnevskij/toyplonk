@@ -1,6 +1,6 @@
 use crate::circuit::Circuit;
 use crate::fft::{compute_lagrange_base, inverse_fft, vec_to_poly};
-use crate::prover::{hash_to_field, Proof};
+use crate::prover::{Proof, hash_to_field};
 use ark_ec::AffineRepr;
 use ark_ec::pairing::Pairing;
 use ark_ff::{Field, Zero};

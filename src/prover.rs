@@ -5,9 +5,9 @@ use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::{Field, One, PrimeField, Zero};
 use ark_poly::univariate::{DenseOrSparsePolynomial, DensePolynomial};
 use ark_poly::{DenseUVPolynomial, Polynomial};
-use std::ops::{Add, Div, Mul, Sub};
 use ark_serialize::CanonicalSerialize;
 use sha2::{Digest, Sha256};
+use std::ops::{Add, Div, Mul, Sub};
 
 /// A PLONK prover using KZG commitments.
 /// Handles constraint construction, permutation checks, quotient polynomial,
